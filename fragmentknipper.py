@@ -1,31 +1,9 @@
-import os
-import shlex
-import shutil
-import subprocess
-import tempfile
-from pathlib import Path
+import json
+import re
+from urllib.parse import urlparse, parse_qs
 
 import streamlit as st
 
-# Check for yt-dlp import with friendly message
-try:
-    from yt_dlp import YoutubeDL
-except ModuleNotFoundError:
-    st.error(
-        "Python package 'yt-dlp' is not installed.\n\n"
-        "If running locally: run `pip install yt-dlp`.\n"
-        "If on Streamlit Community Cloud: add `yt-dlp` to requirements.txt and redeploy."
-    )
-    st.stop()
-
-# Check ffmpeg binary is available
-if shutil.which("ffmpeg") is None:
-    st.error(
-        "ffmpeg binary not found on PATH.\n\n"
-        "On Streamlit Community Cloud: add 'ffmpeg' to packages.txt and redeploy.\n"
-        "Locally: install ffmpeg (e.g., apt, brew, choco or download from ffmpeg.org)."
-    )
-    st.stop()
 
 # ---------- Time parsing utilities ----------
 def parse_timepart(t: str) -> float:
@@ -62,7 +40,10 @@ def parse_timepart(t: str) -> float:
             return float(t)
     return float(t)
 
+
 def parse_ranges(range_string: str):
+    if not range_string:
+        return []
     raw_pieces = []
     for line in range_string.replace('\n', ',').split(','):
         piece = line.strip()
@@ -76,176 +57,244 @@ def parse_ranges(range_string: str):
         start = parse_timepart(a)
         end = parse_timepart(b)
         if end <= start:
-            raise ValueError(f"End time must be greater than start time in range {piece}")
+            raise ValueError(f"End time must be greater than start time in range '{piece}'")
         ranges.append((start, end))
     return ranges
 
-# ---------- yt_dlp download ----------
-def download_video(url: str, outdir: str, logger=None) -> str:
-    opts = {
-        'format': 'bestvideo+bestaudio/best',
-        'outtmpl': os.path.join(outdir, 'video.%(ext)s'),
-        'noplaylist': True,
-        'quiet': True,
-        'no_warnings': True,
-        'merge_output_format': 'mp4',
-    }
-    if logger:
-        logger("Downloading video...")
-    with YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-    ext = info.get('ext', 'mp4')
-    fn = os.path.join(outdir, 'video.' + ext)
-    if not os.path.exists(fn):
-        for f in os.listdir(outdir):
-            if f.startswith('video.'):
-                fn = os.path.join(outdir, f)
-                break
-    if not os.path.exists(fn):
-        raise FileNotFoundError("Downloaded video file not found in " + outdir)
-    if logger:
-        logger(f"Downloaded to: {fn}")
-    return fn
 
-# ---------- ffmpeg operations ----------
-def cut_segments_with_ffmpeg(input_file: str, ranges, tempdir: str, logger=None):
-    seg_files = []
-    for i, (start, end) in enumerate(ranges):
-        seg_path = os.path.join(tempdir, f"seg_{i:03d}.mp4")
-        duration = end - start
-        cmd = [
-            'ffmpeg', '-y', '-hide_banner', '-loglevel', 'error',
-            '-i', input_file,
-            '-ss', str(start),
-            '-t', str(duration),
-            '-c', 'copy',
-            seg_path
-        ]
-        if logger:
-            logger(f"Cutting segment {i+1}/{len(ranges)}: {start} -> {end}")
-            logger(" ".join(shlex.quote(x) for x in cmd))
-        subprocess.check_call(cmd)
-        if not os.path.exists(seg_path):
-            raise RuntimeError(f"Expected segment output missing: {seg_path}")
-        seg_files.append(seg_path)
-    return seg_files
-
-def concat_segments_with_ffmpeg(seg_files, output_file, tempdir: str, logger=None):
-    list_txt = os.path.join(tempdir, "concat_list.txt")
-    with open(list_txt, 'w', encoding='utf-8') as f:
-        for s in seg_files:
-            safe_path = s.replace("'", r"'\''")
-            f.write(f"file '{safe_path}'\n")
-    cmd_copy = ['ffmpeg', '-y', '-hide_banner', '-loglevel', 'error', '-f', 'concat', '-safe', '0', '-i', list_txt, '-c', 'copy', output_file]
+# ---------- YouTube ID extraction ----------
+def extract_yt_id(url: str):
+    if not url:
+        return None
+    url = url.strip()
+    # Try standard parse
     try:
-        if logger:
-            logger("Concatenating (fast copy)...")
-            logger(" ".join(shlex.quote(x) for x in cmd_copy))
-        subprocess.check_call(cmd_copy)
-    except subprocess.CalledProcessError:
-        if logger:
-            logger("Fast concat failed; re-encoding...")
-        cmd_re = ['ffmpeg', '-y', '-hide_banner', '-loglevel', 'error', '-f', 'concat', '-safe', '0', '-i', list_txt, '-c:v', 'libx264', '-c:a', 'aac', output_file]
-        if logger:
-            logger(" ".join(shlex.quote(x) for x in cmd_re))
-        subprocess.check_call(cmd_re)
-    if not os.path.exists(output_file):
-        raise RuntimeError("Concatenated output not found: " + output_file)
-    if logger:
-        logger("Concatenation complete: " + output_file)
-    return output_file
+        parsed = urlparse(url)
+        hostname = (parsed.hostname or "").lower()
+        if hostname in ("youtu.be", "www.youtu.be"):
+            return parsed.path.lstrip('/')
+        if "youtube" in hostname:
+            qs = parse_qs(parsed.query)
+            if "v" in qs:
+                return qs["v"][0]
+            # paths like /embed/VIDEOID or /v/VIDEOID
+            path_parts = parsed.path.split('/')
+            for i, p in enumerate(path_parts):
+                if p in ("embed", "v"):
+                    if len(path_parts) > i + 1:
+                        return path_parts[i + 1]
+            # maybe last part is id
+            last = path_parts[-1]
+            if len(last) == 11:
+                return last
+    except Exception:
+        pass
+    # fallback: regex search for 11-char id
+    m = re.search(r"([0-9A-Za-z_-]{11})", url)
+    if m:
+        return m.group(1)
+    return None
+
 
 # ---------- Streamlit UI ----------
-st.set_page_config(page_title="YouTube Segment Player", layout="centered")
-st.title("YouTube Segment Player")
+st.set_page_config(page_title="YouTube Segment Player (no download)", layout="centered")
+st.title("YouTube Segment Player — Play only specified parts (no download)")
 
 st.markdown(
     "Paste a YouTube link and time ranges (comma or newline separated). "
-    "Example range formats: `0.02-0.05`, `1:03-1:20`, `12-15`, `90-95.5`."
+    "Examples: `0.02-0.05`, `1:03-1:20`, `12-15`, `90-95.5`.\n\n"
+    "This app embeds the YouTube player and plays only the segments you specify in sequence using the YouTube IFrame API. "
+    "No video files are downloaded or processed on the server."
 )
 
 url = st.text_input("YouTube URL")
-ranges_input = st.text_area("Time ranges (comma or newline separated)", value="0.02-0.05,1.03-1.20", height=80)
-keep_temp = st.checkbox("Keep temporary files (for debugging)", value=False)
-run = st.button("Create & Play Segments")
+ranges_input = st.text_area("Time ranges (comma or newline separated)", value="0.02-0.05,1.03-1.20", height=100)
+autoplay = st.checkbox("Attempt autoplay (may be blocked by browser)", value=False)
+loop = st.checkbox("Loop segments (after last segment, start again)", value=False)
+open_player = st.button("Open Player")
 
-if run:
+if open_player:
     if not url.strip():
         st.error("Please enter a YouTube URL.")
-    elif not ranges_input.strip():
-        st.error("Please enter at least one time range.")
     else:
-        status_box = st.empty()
-        logs = []
-        def log(msg):
-            logs.append(msg)
-            status_box.text("\n".join(logs[-20:]))
-        tmpdir = tempfile.mkdtemp(prefix="st_ytseg_")
-        try:
+        video_id = extract_yt_id(url)
+        if not video_id:
+            st.error("Could not extract a YouTube video ID from that URL. Please check the URL.")
+        else:
             try:
                 ranges = parse_ranges(ranges_input)
+                if not ranges:
+                    st.error("No valid ranges parsed. Enter at least one range.")
+                else:
+                    # Build the HTML + JS that uses YouTube IFrame API
+                    segments_json = json.dumps([[float(s), float(e)] for (s, e) in ranges])
+                    autoplay_flag = "true" if autoplay else "false"
+                    loop_flag = "true" if loop else "false"
+                    # Sizing: responsive width
+                    html = f"""
+<!doctype html>
+<html>
+  <head>
+    <style>
+      body {{ font-family: Arial, sans-serif; margin: 0; padding: 8px; }}
+      #controls {{ margin-top: 8px; }}
+      button {{ margin-right: 6px; }}
+      #segments {{ margin-top: 8px; font-size: 14px; }}
+    </style>
+  </head>
+  <body>
+    <div id="player"></div>
+    <div id="controls">
+      <button id="playAll">Play segments</button>
+      <button id="pause">Pause</button>
+      <button id="next">Next</button>
+      <button id="prev">Prev</button>
+      <label><input type="checkbox" id="loop" {"checked" if loop else ""}> Loop</label>
+    </div>
+    <div id="segments"></div>
+
+    <script>
+      var videoId = "{video_id}";
+      var segments = {segments_json};
+      var currentIndex = 0;
+      var checkInterval = null;
+      var player = null;
+      var userLoop = {loop_flag};
+      var autoplay = {autoplay_flag};
+
+      // Render list
+      function renderSegments() {{
+        var el = document.getElementById('segments');
+        var html = '<b>Segments:</b><ol>';
+        for (var i=0;i<segments.length;i++) {{
+          html += '<li>' + secondsToString(segments[i][0]) + ' → ' + secondsToString(segments[i][1]) + (i===currentIndex ? ' <strong>(current)</strong>' : '') + '</li>';
+        }}
+        html += '</ol>';
+        el.innerHTML = html;
+      }}
+
+      function secondsToString(s) {{
+        s = Math.floor(s);
+        var h = Math.floor(s / 3600);
+        var m = Math.floor((s % 3600) / 60);
+        var sec = s % 60;
+        if (h>0) return h + ':' + String(m).padStart(2,'0') + ':' + String(sec).padStart(2,'0');
+        return m + ':' + String(sec).padStart(2,'0');
+      }}
+
+      // Load YouTube IFrame API
+      var tag = document.createElement('script');
+      tag.src = "https://www.youtube.com/iframe_api";
+      document.head.appendChild(tag);
+
+      function onYouTubeIframeAPIReady() {{
+        player = new YT.Player('player', {{
+          height: '390',
+          width: '640',
+          videoId: videoId,
+          playerVars: {{
+            'rel': 0,
+            'modestbranding': 1,
+            'controls': 1,
+            'autoplay': autoplay ? 1 : 0
+          }},
+          events: {{
+            'onReady': onPlayerReady,
+            'onStateChange': onPlayerStateChange
+          }}
+        }});
+      }}
+
+      function onPlayerReady(event) {{
+        renderSegments();
+      }}
+
+      function onPlayerStateChange(event) {{
+        // no-op; we rely on our timer to progress segments
+      }}
+
+      function playSegment(idx) {{
+        if (!player) return;
+        if (idx < 0) idx = 0;
+        if (idx >= segments.length) {{
+          if (userLoop) {{
+            idx = 0;
+          }} else {{
+            player.pauseVideo();
+            return;
+          }}
+        }}
+        currentIndex = idx;
+        var start = Number(segments[currentIndex][0]);
+        var end = Number(segments[currentIndex][1]);
+        try {{ player.seekTo(start, true); }} catch(e) {{ console.warn(e); }}
+        // If autoplay is blocked, user must press play; attempt to play anyway
+        try {{ player.playVideo(); }} catch(e) {{ console.warn(e); }}
+        if (checkInterval) clearInterval(checkInterval);
+        checkInterval = setInterval(function() {{
+          if (!player || typeof player.getCurrentTime !== 'function') return;
+          var now = player.getCurrentTime();
+          // small tolerance to account for seek inaccuracy and buffering
+          if (now >= end - 0.15) {{
+            clearInterval(checkInterval);
+            // Advance to next segment
+            currentIndex += 1;
+            if (currentIndex < segments.length) {{
+              playSegment(currentIndex);
+            }} else {{
+              if (userLoop) {{
+                playSegment(0);
+              }} else {{
+                player.pauseVideo();
+              }}
+            }}
+            renderSegments();
+          }}
+        }}, 200);
+        renderSegments();
+      }}
+
+      document.getElementById('playAll').addEventListener('click', function() {{
+        userLoop = document.getElementById('loop').checked;
+        playSegment(0);
+      }});
+      document.getElementById('pause').addEventListener('click', function() {{
+        if (player) player.pauseVideo();
+        if (checkInterval) clearInterval(checkInterval);
+      }});
+      document.getElementById('next').addEventListener('click', function() {{
+        if (checkInterval) clearInterval(checkInterval);
+        playSegment(currentIndex + 1);
+      }});
+      document.getElementById('prev').addEventListener('click', function() {{
+        if (checkInterval) clearInterval(checkInterval);
+        playSegment(Math.max(0, currentIndex - 1));
+      }});
+
+      // expose helpful keyboard shortcuts
+      document.addEventListener('keydown', function(e) {{
+        if (e.key === ' ') {{
+          if (player) {{
+            var state = player.getPlayerState();
+            if (state === YT.PlayerState.PLAYING) {{
+              player.pauseVideo();
+              if (checkInterval) clearInterval(checkInterval);
+            }} else {{
+              player.playVideo();
+            }}
+          }}
+          e.preventDefault();
+        }} else if (e.key === 'n') {{
+          document.getElementById('next').click();
+        }} else if (e.key === 'p') {{
+          document.getElementById('prev').click();
+        }}
+      }});
+    </script>
+  </body>
+</html>
+"""
+                    # Render HTML in Streamlit
+                    st.components.v1.html(html, height=560, scrolling=True)
             except Exception as e:
                 st.error(f"Could not parse ranges: {e}")
-                raise
-
-            try:
-                in_file = download_video(url, tmpdir, logger=log)
-            except Exception as e:
-                st.error(f"Download failed: {e}")
-                raise
-
-            try:
-                segs = cut_segments_with_ffmpeg(in_file, ranges, tmpdir, logger=log)
-            except subprocess.CalledProcessError as e:
-                st.error(f"ffmpeg failed while cutting segments: {e}")
-                raise
-            except Exception as e:
-                st.error(f"Error cutting segments: {e}")
-                raise
-
-            out_file = os.path.join(tmpdir, "out_segments.mp4")
-            try:
-                concat_segments_with_ffmpeg(segs, out_file, tmpdir, logger=log)
-            except subprocess.CalledProcessError as e:
-                st.error(f"ffmpeg failed while concatenating: {e}")
-                raise
-            except Exception as e:
-                st.error(f"Error concatenating segments: {e}")
-                raise
-
-            log("Preparing playback...")
-            st.success("Ready — playing below (and you can download the result).")
-            try:
-                st.video(out_file)
-            except Exception:
-                with open(out_file, "rb") as f:
-                    data = f.read()
-                st.video(data)
-
-            try:
-                with open(out_file, "rb") as f:
-                    vid_bytes = f.read()
-                st.download_button("Download concatenated clip", data=vid_bytes, file_name="segments.mp4", mime="video/mp4")
-            except Exception as e:
-                st.warning(f"Could not create download button: {e}")
-
-        finally:
-            if keep_temp:
-                log(f"Kept temp dir: {tmpdir}")
-                st.info(f"Temporary files kept at: {tmpdir}")
-            else:
-                try:
-                    for root, dirs, files in os.walk(tmpdir, topdown=False):
-                        for name in files:
-                            try:
-                                os.remove(os.path.join(root, name))
-                            except Exception:
-                                pass
-                        for name in dirs:
-                            try:
-                                os.rmdir(os.path.join(root, name))
-                            except Exception:
-                                pass
-                    os.rmdir(tmpdir)
-                except Exception:
-                    pass
