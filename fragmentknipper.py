@@ -7,6 +7,7 @@ import streamlit as st
 def parse_timepart(t: str) -> float:
     """
     Parse a time string into seconds.
+
     Supported formats:
     - HH:MM:SS(.ms), MM:SS(.ms), SS(.ms)
     - "m.s" is interpreted heuristically:
@@ -136,24 +137,28 @@ def extract_yt_id(url: str):
 
 # ---------- Streamlit UI ----------
 st.set_page_config(page_title="YouTube Segment Player", layout="centered")
+
+# Title and intro
 st.markdown(
     "<h1 style='margin-bottom:0.2rem'>YouTube Segment Player — Play only specified parts (no download)</h1>",
     unsafe_allow_html=True,
 )
 st.markdown(
     """
-    Paste a YouTube link and time ranges (comma or newline separated). Examples of supported time formats:
-    - 0.02-0.05  (decimal seconds)
-    - 1:03-1:20  (MM:SS)
-    - 12-15
-    - 90-95.5
-    This app embeds the YouTube player and plays only the segments you specify in sequence using
-    the YouTube IFrame API. No video files are downloaded or processed on the server.
-    """.strip()
+Paste a YouTube link and time ranges (comma or newline separated). Examples of supported time formats:
+- 0.02-0.05  (decimal seconds)
+- 1:03-1:20  (MM:SS)
+- 12-15
+- 90-95.5
+
+This app embeds the YouTube player and plays only the segments you specify in sequence using
+the YouTube IFrame API. No video files are downloaded or processed on the server.
+""".strip()
 )
 
-# Layout: left for inputs, right for advanced / actions
+# Layout: left for inputs, right for options
 col1, col2 = st.columns([2, 1])
+
 with col1:
     url = st.text_input("YouTube URL", placeholder="https://www.youtube.com/watch?v=VIDEO_ID")
     ranges_input = st.text_area(
@@ -169,9 +174,11 @@ with col1:
             "- Minutes/seconds: `1:03-1:20`\n"
             "- Decimal seconds: `95.5-100.0`"
         )
+
 with col2:
     st.markdown("Options")
-    autoplay = st.checkbox("Attempt autoplay (may be blocked)", value=False)
+    # Play by default: set default True so the player attempts to start automatically.
+    autoplay = st.checkbox("Attempt autoplay (may be blocked by browser)", value=True)
     loop = st.checkbox("Loop segments", value=False)
     end_padding = st.number_input(
         "End padding (seconds)",
@@ -206,7 +213,6 @@ if open_player:
                 else:
                     # Optionally merge overlapping/adjacent segments
                     if merge_adjacent:
-                        # sort and merge with tiny epsilon
                         eps = 1e-6
                         ranges = sorted(ranges, key=lambda x: x[0])
                         merged = []
@@ -225,44 +231,64 @@ if open_player:
                     autoplay_flag = "true" if autoplay else "false"
                     loop_flag = "true" if loop else "false"
 
-                    # Sizing: responsive width; we'll give a reasonable default height
+                    # Sizing: responsive width; improved readability styles
                     html = f"""
 <!doctype html>
 <html>
   <head>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
-      body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial; margin: 8px; }}
-      #container {{ max-width: 100%; }}
-      #player {{ width: 100%; max-width: 960px; margin: 0 auto; }}
-      #controls {{ margin-top: 10px; display:flex; flex-wrap:wrap; gap:8px; align-items:center; }}
+      :root {{
+        --bg: #ffffff;
+        --card: #fbfbfb;
+        --muted: #6b7280;
+        --accent: #1a73e8;
+        --radius: 10px;
+        --shadow: 0 6px 20px rgba(18, 18, 18, 0.06);
+      }}
+      body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial; margin: 12px; background: var(--bg); color: #111827; }}
+      #container {{ max-width: 980px; margin: 0 auto; }}
+      .card {{ background: var(--card); border-radius: var(--radius); padding: 12px; box-shadow: var(--shadow); }}
+      #player {{ width: 100%; aspect-ratio: 16/9; border-radius: 8px; overflow: hidden; background: #000; }}
+      #controls {{ margin-top: 12px; display:flex; flex-wrap:wrap; gap:8px; align-items:center; }}
       button {{
         background: linear-gradient(180deg,#ffffff,#f4f4f4);
-        border: 1px solid #d1d1d1;
-        padding: 8px 12px;
-        border-radius: 6px;
+        border: 1px solid #e6e7ea;
+        padding: 8px 14px;
+        border-radius: 8px;
         cursor: pointer;
         font-size: 14px;
       }}
-      button:hover {{ filter:brightness(0.98); }}
+      button.primary {{
+        background: linear-gradient(180deg,var(--accent), #1666c3);
+        color: white;
+        border: none;
+      }}
+      button:active {{ transform: translateY(1px); }}
       label {{ font-size: 14px; }}
-      #segments {{ margin-top: 12px; font-size: 14px; max-width:960px; }}
-      ol {{ padding-left: 1.1rem; margin: 6px 0; }}
-      li strong {{ color: #1a73e8; margin-left:6px; }}
+      #segments {{ margin-top: 12px; font-size: 15px; max-width:100%; }}
+      ol {{ padding-left: 1.15rem; margin: 6px 0; }}
+      li {{ margin-bottom:6px; line-height:1.35; }}
+      li strong.current {{ color: var(--accent); margin-left:6px; font-weight:700; }}
+      .muted {{ color: var(--muted); font-size:13px; margin-left:auto; }}
+      .hint {{ color: var(--muted); font-size:13px; margin-top:6px; }}
     </style>
   </head>
   <body>
-    <div id="container">
+    <div id="container" class="card">
       <div id="player"></div>
       <div id="controls">
-        <button id="playAll">Play segments</button>
+        <button id="playAll" class="primary">Play segments</button>
         <button id="pause">Pause</button>
-        <button id="next">Next</button>
         <button id="prev">Prev</button>
-        <label style="margin-left:8px;"><input type="checkbox" id="loop" {"checked" if loop else ""}> Loop</label>
-        <div style="margin-left:auto; font-size:13px; color:#666;">Autoplay attempt: {autoplay}</div>
+        <button id="next">Next</button>
+        <label style="margin-left:8px;">
+          <input type="checkbox" id="loop" {"checked" if loop else ""}> Loop
+        </label>
+        <div class="muted">Autoplay attempt: {autoplay}</div>
       </div>
-      <div id="segments"></div>
+      <div id="segments" class="card" style="margin-top:12px;"></div>
+      <div class="hint">Keyboard: Space = Play/Pause, n = next, p = prev</div>
     </div>
 
     <script>
@@ -280,7 +306,8 @@ if open_player:
         var el = document.getElementById('segments');
         var html = '<b>Segments:</b><ol>';
         for (var i=0;i<segments.length;i++) {{
-          html += '<li>' + secondsToString(segments[i][0]) + ' → ' + secondsToString(segments[i][1]) + (i===currentIndex ? ' <strong>(current)</strong>' : '') + '</li>';
+          var cls = (i === currentIndex) ? ' <strong class="current">(current)</strong>' : '';
+          html += '<li><code>' + secondsToString(segments[i][0]) + '</code> → <code>' + secondsToString(segments[i][1]) + '</code>' + cls + '</li>';
         }}
         html += '</ol>';
         el.innerHTML = html;
@@ -296,9 +323,11 @@ if open_player:
       }}
 
       // Load YouTube IFrame API
-      var tag = document.createElement('script');
-      tag.src = "https://www.youtube.com/iframe_api";
-      document.head.appendChild(tag);
+      (function() {{
+        var tag = document.createElement('script');
+        tag.src = "https://www.youtube.com/iframe_api";
+        document.head.appendChild(tag);
+      }})();
 
       function onYouTubeIframeAPIReady() {{
         player = new YT.Player('player', {{
@@ -320,6 +349,11 @@ if open_player:
 
       function onPlayerReady(event) {{
         renderSegments();
+        // Attempt to play segments immediately if autoplay requested.
+        if (autoplay) {{
+          // Small delay helps in some browsers to allow the iframe to be ready.
+          setTimeout(function() {{ playSegment(0); }}, 250);
+        }}
       }}
 
       function onPlayerStateChange(event) {{
@@ -342,7 +376,7 @@ if open_player:
         var end = Number(segments[currentIndex][1]);
         var effectiveEnd = end + Number(endPadding);
 
-        // Seek to start (use allowSeekAhead=true)
+        // Seek to start
         try {{ player.seekTo(start, true); }} catch(e) {{ console.warn(e); }}
         // Try to start playing
         try {{ player.playVideo(); }} catch(e) {{ console.warn(e); }}
@@ -350,8 +384,7 @@ if open_player:
         // Clear any previous interval
         if (checkInterval) clearInterval(checkInterval);
 
-        // Choose a conservative tolerance based on endPadding to avoid premature advancing.
-        // We subtract only a small tolerance so we don't advance too early.
+        // Tolerance to avoid premature cutoff
         var tolerance = Math.max(0.01, Math.min(0.05, endPadding * 0.5));
 
         checkInterval = setInterval(function() {{
@@ -363,7 +396,6 @@ if open_player:
             clearInterval(checkInterval);
             currentIndex += 1;
             if (currentIndex < segments.length) {{
-              // Play next segment
               playSegment(currentIndex);
             }} else {{
               if (userLoop) {{
@@ -419,7 +451,7 @@ if open_player:
   </body>
 </html>
 """
-                    # Render HTML in Streamlit
-                    st.components.v1.html(html, height=640, scrolling=True)
+                    # Render HTML in Streamlit (taller so UI fits)
+                    st.components.v1.html(html, height=720, scrolling=True)
             except Exception as e:
                 st.error(f"Could not parse ranges: {e}")
