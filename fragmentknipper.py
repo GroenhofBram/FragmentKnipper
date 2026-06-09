@@ -313,13 +313,27 @@ if open_player:
         el.innerHTML = html;
       }}
 
+      // Improved secondsToString: preserves fractional seconds (two decimals)
       function secondsToString(s) {{
-        s = Math.floor(s);
-        var h = Math.floor(s / 3600);
-        var m = Math.floor((s % 3600) / 60);
-        var sec = s % 60;
-        if (h>0) return h + ':' + String(m).padStart(2,'0') + ':' + String(sec).padStart(2,'0');
-        return m + ':' + String(sec).padStart(2,'0');
+        var total = Number(s);
+        if (!isFinite(total)) return String(s);
+
+        var h = Math.floor(total / 3600);
+        var m = Math.floor((total % 3600) / 60);
+        var sec = total % 60;
+
+        // integer and fractional parts for seconds
+        var secInt = Math.floor(sec);
+        var frac = sec - secInt;
+        // format fractional part to two decimals
+        var fracStr = (frac > 0) ? frac.toFixed(2).substring(1) : '.00';
+        // seconds with two-decimal fraction, padded to 2 digits before decimal
+        var secStr = String(secInt).padStart(2, '0') + fracStr;
+
+        if (h > 0) {{
+          return h + ':' + String(m).padStart(2, '0') + ':' + secStr;
+        }}
+        return String(m) + ':' + secStr;
       }}
 
       // Load YouTube IFrame API
@@ -352,9 +366,9 @@ if open_player:
         // Attempt to play segments immediately if autoplay requested.
         if (autoplay) {{
           // small delay to allow iframe to become fully ready
-          setTimeout(function() {{ 
+          setTimeout(function() {{
             userLoop = document.getElementById('loop').checked;
-            playSegment(0); 
+            playSegment(0);
           }}, 250);
         }}
       }}
@@ -382,7 +396,7 @@ if open_player:
         // Decide padding for this segment; keep it conservative for very short segments.
         var padding = Number(endPadding);
         if (segLength > 0) {{
-          // don't allow padding to exceed half the segment length for tiny segments
+          // don't allow padding to exceed quarter of segment length for tiny segments
           padding = Math.min(padding, Math.max(0.001, segLength / 4));
         }} else {{
           padding = Math.max(0.001, padding);
@@ -396,7 +410,6 @@ if open_player:
         }}
 
         // Seek and play with a short delay to improve reliability for tiny segments.
-        // In some browsers the immediate play after seek is missed for very short segments.
         setTimeout(function() {{
           try {{ player.seekTo(start, true); }} catch(e) {{ console.warn(e); }}
           try {{ player.playVideo(); }} catch(e) {{ console.warn(e); }}
@@ -417,7 +430,6 @@ if open_player:
           var now = player.getCurrentTime();
 
           // Only consider advancing after we've definitely started the segment.
-          // This prevents the algorithm from thinking it already passed the end when player hasn't started.
           if (now >= start - 0.02 && now >= (effectiveEnd - tolerance)) {{
             clearInterval(checkInterval);
             checkInterval = null;
