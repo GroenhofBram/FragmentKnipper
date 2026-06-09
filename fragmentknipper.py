@@ -1,3 +1,4 @@
+```python
 import json
 import re
 from urllib.parse import urlparse, parse_qs
@@ -7,7 +8,6 @@ import streamlit as st
 def parse_timepart(t: str) -> float:
     """
     Parse a time string into seconds.
-
     Supported formats:
     - HH:MM:SS(.ms), MM:SS(.ms), SS(.ms)
     - "m.s" is interpreted heuristically:
@@ -137,7 +137,6 @@ def extract_yt_id(url: str):
 
 # ---------- Streamlit UI ----------
 st.set_page_config(page_title="YouTube Segment Player", layout="centered")
-
 st.markdown(
     "<h1 style='margin-bottom:0.2rem'>YouTube Segment Player — Play only specified parts (no download)</h1>",
     unsafe_allow_html=True,
@@ -149,7 +148,6 @@ st.markdown(
     - 1:03-1:20  (MM:SS)
     - 12-15
     - 90-95.5
-
     This app embeds the YouTube player and plays only the segments you specify in sequence using
     the YouTube IFrame API. No video files are downloaded or processed on the server.
     """.strip()
@@ -157,7 +155,6 @@ st.markdown(
 
 # Layout: left for inputs, right for advanced / actions
 col1, col2 = st.columns([2, 1])
-
 with col1:
     url = st.text_input("YouTube URL", placeholder="https://www.youtube.com/watch?v=VIDEO_ID")
     ranges_input = st.text_area(
@@ -173,7 +170,6 @@ with col1:
             "- Minutes/seconds: `1:03-1:20`\n"
             "- Decimal seconds: `95.5-100.0`"
         )
-
 with col2:
     st.markdown("Options")
     autoplay = st.checkbox("Attempt autoplay (may be blocked)", value=False)
@@ -229,6 +225,7 @@ if open_player:
                     segments_json = json.dumps([[float(s), float(e)] for (s, e) in ranges])
                     autoplay_flag = "true" if autoplay else "false"
                     loop_flag = "true" if loop else "false"
+
                     # Sizing: responsive width; we'll give a reasonable default height
                     html = f"""
 <!doctype html>
@@ -362,7 +359,6 @@ if open_player:
           if (!player || typeof player.getCurrentTime !== 'function') return;
           var now = player.getCurrentTime();
 
-          // If playback has jumped backward (e.g., user seeked), keep restarted behavior intact.
           // Advance to next segment only when the effective end is reached (with small tolerance).
           if (now >= (effectiveEnd - tolerance)) {{
             clearInterval(checkInterval);
@@ -423,8 +419,9 @@ if open_player:
     </script>
   </body>
 </html>
-
+"""
                     # Render HTML in Streamlit
                     st.components.v1.html(html, height=640, scrolling=True)
             except Exception as e:
                 st.error(f"Could not parse ranges: {e}")
+```
