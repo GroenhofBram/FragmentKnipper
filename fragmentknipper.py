@@ -10,10 +10,9 @@ def parse_timepart(t: str) -> float:
 
     Supported formats:
     - HH:MM:SS(.ms), MM:SS(.ms), SS(.ms)
-    - "m.s" is interpreted heuristically:
-        * If integer part >= 1 and fractional part looks like seconds (0-59), it's treated as M.S (minutes.seconds).
-          e.g. "1.03" -> 1 minute 3 seconds (63s)
-        * Otherwise it's treated as decimal seconds: "95.5" -> 95.5s, "0.02" -> 0.02s
+    - X.YY is interpreted as minutes.seconds when the fractional part has exactly two digits
+      and represents 0-59 (e.g. "0.05" -> 5 seconds, "2.30" -> 150 seconds).
+    - Otherwise, decimal seconds are used (e.g. "95.5" -> 95.5s, "0.005" -> 0.005s).
     """
     if t is None:
         raise ValueError("Empty time string")
@@ -46,27 +45,25 @@ def parse_timepart(t: str) -> float:
 
     # No colon, but contains a dot
     if '.' in t:
-        # Heuristic: interpret "m.ss" (minutes.seconds) when it makes sense:
         left, right = t.split('.', 1)
+        # If left is empty, treat as decimal seconds (".5" -> 0.5s)
         if left == '':
-            # ".5" => 0.5 seconds
             return float(t)
+        # If fractional part has exactly two digits and looks like seconds (00-59),
+        # treat as minutes.seconds (m.ss)
+        if re.fullmatch(r'\d+', left) and re.fullmatch(r'\d{2}$', right):
+            try:
+                li = int(left)
+                ri = int(right)
+                if 0 <= ri < 60:
+                    return float(li) * 60.0 + float(ri)
+            except ValueError:
+                pass
+        # Otherwise, fallback to decimal seconds
         try:
-            li = int(left)
-            # If integer part >= 1 and the fractional part looks like seconds (<60 and up to two digits),
-            # treat it as minutes.seconds. This covers inputs like "1.03" -> 1 minute 3 seconds.
-            # Otherwise treat as decimal seconds.
-            if li >= 1:
-                # if right only numeric and reasonably sized (< 3 digits), consider it mm.ss
-                if re.fullmatch(r'\d{1,2}$', right):
-                    ri = int(right)
-                    if 0 <= ri < 60:
-                        return float(li) * 60.0 + float(ri)
-            # Otherwise, fall back to decimal seconds
             return float(t)
         except ValueError:
-            # Fallback to generic float parse
-            return float(t)
+            raise ValueError(f"Bad numeric time: {t}")
 
     # Plain integer seconds
     return float(t)
@@ -146,7 +143,8 @@ st.markdown(
 st.markdown(
     """
 Paste a YouTube link and time ranges (comma or newline separated). Examples of supported time formats:
-- 0.02-0.05  (decimal seconds)
+- 0.05  (interpreted as minutes.seconds if written like X.YY, e.g. 0.05 -> 5s)
+- 0.005 (decimal seconds)
 - 1:03-1:20  (MM:SS)
 - 12-15
 - 90-95.5
@@ -163,21 +161,19 @@ with col1:
     url = st.text_input("YouTube URL", placeholder="https://www.youtube.com/watch?v=VIDEO_ID")
     ranges_input = st.text_area(
         "Time ranges (comma or newline separated)",
-        value="0.02-0.05, 1:03-1:20",
+        value="0.00-0.05, 1:03-1:20",
         height=140,
-        help="Examples: 0.02-0.05, 1:03-1:20, 12-15, 90-95.5"
+        help="Examples: 0.00-0.05, 1:03-1:20, 12-15, 90-95.5"
     )
     example_expander = st.expander("Show example inputs")
     with example_expander:
         st.markdown(
-            "- Adjacent short ranges: `0.02-0.05, 0.05-0.06` (use end padding to avoid premature cut)\n"
-            "- Minutes/seconds: `1:03-1:20`\n"
-            "- Decimal seconds: `95.5-100.0`"
+            "- Interpreting `0.05` as 5 seconds (minutes.seconds) when written with two fractional digits: `0.00-0.05` -> 0:00.00 → 0:05.00\n"
+            "- Use decimal seconds when you need sub-second precision: `0.005-0.020`"
         )
 
 with col2:
     st.markdown("Options")
-    # Play by default: set default True so the player attempts to start automatically.
     autoplay = st.checkbox("Attempt autoplay (may be blocked by browser)", value=True)
     loop = st.checkbox("Loop segments", value=False)
     end_padding = st.number_input(
@@ -396,7 +392,7 @@ if open_player:
         // Decide padding for this segment; keep it conservative for very short segments.
         var padding = Number(endPadding);
         if (segLength > 0) {{
-          // don't allow padding to exceed quarter of segment length for tiny segments
+          # don't allow padding to exceed quarter of segment length for tiny segments
           padding = Math.min(padding, Math.max(0.001, segLength / 4));
         }} else {{
           padding = Math.max(0.001, padding);
