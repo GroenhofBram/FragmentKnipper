@@ -272,6 +272,7 @@ if open_player:
       li strong.current {{ color: var(--accent); margin-left:6px; font-weight:700; }}
       .muted {{ color: var(--muted); font-size:13px; margin-left:auto; }}
       .hint {{ color: var(--muted); font-size:13px; margin-top:6px; }}
+      code {{ background:#fff; padding:0 6px; border-radius:4px; border:1px solid #eee; }}
     </style>
   </head>
   <body>
@@ -300,7 +301,6 @@ if open_player:
       var userLoop = {loop_flag};
       var autoplay = {autoplay_flag};
       var endPadding = {end_padding};  // seconds
-      var checkFreq = 100; // ms
 
       function renderSegments() {{
         var el = document.getElementById('segments');
@@ -351,8 +351,11 @@ if open_player:
         renderSegments();
         // Attempt to play segments immediately if autoplay requested.
         if (autoplay) {{
-          // Small delay helps in some browsers to allow the iframe to be ready.
-          setTimeout(function() {{ playSegment(0); }}, 250);
+          // small delay to allow iframe to become fully ready
+          setTimeout(function() {{ 
+            userLoop = document.getElementById('loop').checked;
+            playSegment(0); 
+          }}, 250);
         }}
       }}
 
@@ -367,33 +370,57 @@ if open_player:
           if (userLoop) {{
             idx = 0;
           }} else {{
-            player.pauseVideo();
+            try {{ player.pauseVideo(); }} catch(e) {{}} 
             return;
           }}
         }}
         currentIndex = idx;
         var start = Number(segments[currentIndex][0]);
         var end = Number(segments[currentIndex][1]);
-        var effectiveEnd = end + Number(endPadding);
+        var segLength = Math.max(0.0, end - start);
 
-        // Seek to start
-        try {{ player.seekTo(start, true); }} catch(e) {{ console.warn(e); }}
-        // Try to start playing
-        try {{ player.playVideo(); }} catch(e) {{ console.warn(e); }}
+        // Decide padding for this segment; keep it conservative for very short segments.
+        var padding = Number(endPadding);
+        if (segLength > 0) {{
+          // don't allow padding to exceed half the segment length for tiny segments
+          padding = Math.min(padding, Math.max(0.001, segLength / 4));
+        }} else {{
+          padding = Math.max(0.001, padding);
+        }}
+        var effectiveEnd = end + padding;
 
-        // Clear any previous interval
-        if (checkInterval) clearInterval(checkInterval);
+        // Clear any previous interval before seeking/playing
+        if (checkInterval) {{
+          clearInterval(checkInterval);
+          checkInterval = null;
+        }}
 
-        // Tolerance to avoid premature cutoff
-        var tolerance = Math.max(0.01, Math.min(0.05, endPadding * 0.5));
+        // Seek and play with a short delay to improve reliability for tiny segments.
+        // In some browsers the immediate play after seek is missed for very short segments.
+        setTimeout(function() {{
+          try {{ player.seekTo(start, true); }} catch(e) {{ console.warn(e); }}
+          try {{ player.playVideo(); }} catch(e) {{ console.warn(e); }}
+          // second attempt a bit later (helps when autoplay is restricted or player is still buffering)
+          setTimeout(function() {{
+            try {{ player.playVideo(); }} catch(e) {{ /* ignore */ }}
+          }}, 120);
+        }}, 40);
+
+        // Tolerance: small value; ensure we don't advance before actually reaching start.
+        var tolerance = Math.max(0.005, Math.min(0.05, padding * 0.5));
+
+        // Choose check frequency: faster for very short segments
+        var checkFreq = segLength < 0.25 ? 30 : 100;
 
         checkInterval = setInterval(function() {{
           if (!player || typeof player.getCurrentTime !== 'function') return;
           var now = player.getCurrentTime();
 
-          // Advance to next segment only when the effective end is reached (with small tolerance).
-          if (now >= (effectiveEnd - tolerance)) {{
+          // Only consider advancing after we've definitely started the segment.
+          // This prevents the algorithm from thinking it already passed the end when player hasn't started.
+          if (now >= start - 0.02 && now >= (effectiveEnd - tolerance)) {{
             clearInterval(checkInterval);
+            checkInterval = null;
             currentIndex += 1;
             if (currentIndex < segments.length) {{
               playSegment(currentIndex);
@@ -401,7 +428,7 @@ if open_player:
               if (userLoop) {{
                 playSegment(0);
               }} else {{
-                player.pauseVideo();
+                try {{ player.pauseVideo(); }} catch(e) {{ /* ignore */ }}
               }}
             }}
             renderSegments();
@@ -416,15 +443,18 @@ if open_player:
         playSegment(0);
       }});
       document.getElementById('pause').addEventListener('click', function() {{
-        if (player) player.pauseVideo();
+        if (player) try {{ player.pauseVideo(); }} catch(e) {{ /* ignore */ }}
         if (checkInterval) clearInterval(checkInterval);
+        checkInterval = null;
       }});
       document.getElementById('next').addEventListener('click', function() {{
         if (checkInterval) clearInterval(checkInterval);
+        checkInterval = null;
         playSegment(currentIndex + 1);
       }});
       document.getElementById('prev').addEventListener('click', function() {{
         if (checkInterval) clearInterval(checkInterval);
+        checkInterval = null;
         playSegment(Math.max(0, currentIndex - 1));
       }});
 
@@ -434,10 +464,11 @@ if open_player:
           if (player) {{
             var state = player.getPlayerState();
             if (state === YT.PlayerState.PLAYING) {{
-              player.pauseVideo();
+              try {{ player.pauseVideo(); }} catch(e) {{ /* ignore */ }}
               if (checkInterval) clearInterval(checkInterval);
+              checkInterval = null;
             }} else {{
-              player.playVideo();
+              try {{ player.playVideo(); }} catch(e) {{ /* ignore */ }}
             }}
           }}
           e.preventDefault();
