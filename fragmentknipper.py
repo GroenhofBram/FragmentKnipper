@@ -1,4 +1,3 @@
-```python
 import json
 import re
 from urllib.parse import urlparse, parse_qs
@@ -424,4 +423,3 @@ if open_player:
                     st.components.v1.html(html, height=640, scrolling=True)
             except Exception as e:
                 st.error(f"Could not parse ranges: {e}")
-```
