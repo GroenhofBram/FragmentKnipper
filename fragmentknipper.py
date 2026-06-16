@@ -6,15 +6,15 @@ import streamlit as st
 # ---------- Time parsing utilities ----------
 def parse_timepart(t: str) -> float:
     if t is None:
-        raise ValueError("Empty time string")
+        raise ValueError("Lege tijdstring")
     t = t.strip()
     if not t:
-        raise ValueError("Empty time string")
+        raise ValueError("Lege tijdstring")
 
     if ':' in t:
         parts = [p for p in t.split(':') if p != '']
         if len(parts) > 3:
-            raise ValueError(f"Bad time format: {t}")
+            raise ValueError(f"Foutief tijdsformaat: {t}")
         parts_f = []
         for i, p in enumerate(parts):
             if i == len(parts) - 1:
@@ -53,14 +53,14 @@ def parse_timepart(t: str) -> float:
 def parse_ranges_with_padding(range_string: str, default_pad: float):
     if not range_string:
         return []
-    s = re.sub(r'\([^)]*\)', '', range_string)
+    s = re.sub(r'\([^)]*\)', '', range_string)  # verwijder parenthetische annotaties
     pieces = [p.strip() for p in re.split(r'[,\n]+', s) if p.strip()]
     ranges = []
     rng_re = re.compile(r'(\d+(?::\d+){0,2}(?:\.\d+)?)[\s\-–—]+(\d+(?::\d+){0,2}(?:\.\d+)?)')
     pad_re_list = [
-        re.compile(r'\|\s*([0-9]+(?:\.\d+)?)'),
-        re.compile(r'pad[:=]?\s*([0-9]+(?:\.\d+)?)', re.I),
-        re.compile(r'\bp[:=]?\s*([0-9]+(?:\.\d+)?)\b', re.I),
+        re.compile(r'\|\s*([0-9]+(?:\.\d+)?)'),                 # |0.2
+        re.compile(r'pad[:=]?\s*([0-9]+(?:\.\d+)?)', re.I),     # pad:0.2 of pad=0.2 of pad 0.2
+        re.compile(r'\bp[:=]?\s*([0-9]+(?:\.\d+)?)\b', re.I),   # p:0.2 of p=0.2
     ]
     for piece in pieces:
         m = rng_re.search(piece)
@@ -227,66 +227,63 @@ def extract_yt_id(url: str):
 
 
 # ---------- Streamlit UI ----------
-st.set_page_config(page_title="YouTube Segment Player", layout="centered")
-st.markdown("<h1 style='margin-bottom:0.2rem'>YouTube Segment Player — Play only specified parts (no download)</h1>", unsafe_allow_html=True)
+st.set_page_config(page_title="YouTube Segmentspeler", layout="centered")
+st.markdown("<h1 style='margin-bottom:0.2rem'>YouTube Segmentspeler — Speel alleen opgegeven delen (geen download)</h1>", unsafe_allow_html=True)
 st.markdown(
     """
-Paste a YouTube link and time ranges (comma or newline separated). Examples of supported time formats:
-- 0.02-0.05  (decimal seconds)
+Plak een YouTube-link en tijdsbereiken (gescheiden door komma's of nieuwe regels). Voorbeelden van ondersteunde tijdformaten:
+- 0.02-0.05  (decimale seconden)
 - 1:03-1:20  (MM:SS)
 - 12-15
 - 90-95.5
 
-You can also provide "Sections to cut" — time ranges that will be removed from the playback.
-Extra text like "(knip)" or other annotations will be ignored automatically.
-
-Per-section padding:
-- You can specify a per-range padding with `|<seconds>` or `pad:<seconds>`.
-- If not provided the base padding used is 1.0 second.
-- After the player loads, you can edit each segment's padding inline in the segments box; changes apply immediately.
+Deze app embed de YouTube-speler en speelt alleen de door jou opgegeven segmenten achter elkaar af met behulp van de YouTube IFrame API.
+Er worden geen videobestanden gedownload of verwerkt op de server.
+Extra tekst zoals "(knip)" of andere annotaties wordt automatisch genegeerd.
 """.strip()
 )
 
-# Layout: left for inputs, right for options
+# Layout: links invoer, rechts opties
 col1, col2 = st.columns([2, 1])
 with col1:
     url = st.text_input("YouTube URL", placeholder="https://www.youtube.com/watch?v=VIDEO_ID")
     ranges_input = st.text_area(
-        "Time ranges to play (comma or newline separated). You may add per-range padding with '|0.2' or 'pad:0.2'.",
+        "Tijdsbereiken om af te spelen (komma of newline gescheiden). Je kunt per-bereik padding opgeven met '|0.2' of 'pad:0.2'.",
         value="0.00-4.43",
         height=160,
-        help="Examples: 0.02-0.05|0.2, 1:03-1:20 pad:0.5, 12-15"
+        help="Voorbeelden: 0.02-0.05|0.2, 1:03-1:20 pad:0.5, 12-15. Tekst tussen haakjes wordt genegeerd."
     )
     cuts_input = st.text_area(
-        "Sections to cut (these will be removed from the playback)",
+        "Delen om te knippen (worden verwijderd uit de afspeellijst)",
         value="3.12-3.32 (knip), 4.44-5.21 (knip)",
         height=120,
-        help="Enter ranges that should be removed from the playback. Annotations like '(knip)' are ignored."
+        help="Voer bereiken in die uit de afspeellijst verwijderd moeten worden. Annotaties zoals '(knip)' worden genegeerd."
     )
-    example_expander = st.expander("Show example inputs")
+    example_expander = st.expander("Voorbeeldinvoer tonen")
     with example_expander:
         st.markdown(
-            "- Play ranges: `0.00-4.43|0.1` (plays 0.00→4.43 with 0.1s padding at the end)\n"
-            "- Cuts: `3.12-3.32 (knip), 4.44-5.21 (knip)`\n"
-            "- If you omit per-range padding, a base padding of 1.0s is used."
+            "- Afspelen: `0.00-4.43|0.1` (speelt 0.00→4.43 met 0.1s padding)\n"
+            "- Knipsels: `3.12-3.32 (knip), 4.44-5.21 (knip)`\n"
+            "- Als je geen per-bereik padding opgeeft wordt de basis-padding van 1.0s gebruikt."
         )
 
 with col2:
-    st.markdown("Options")
-    autoplay = st.checkbox("Attempt autoplay (may be blocked by browser)", value=True)
-    loop = st.checkbox("Loop segments", value=True)
-    merge_adjacent = True  # always on
+    st.markdown("Opties")
+    autoplay = st.checkbox("Probeer automatisch af te spelen (kan door browser worden geblokkeerd)", value=True)
+    loop = st.checkbox("Herhaal segmenten", value=True)
+    # Geen globale padding-optie; basis padding is 1.0 wanneer niet opgegeven per bereik
+    merge_adjacent = True  # altijd aan
 
-st.write("")  # small spacer
-open_player = st.button("Open Player")
+st.write("")  # kleine ruimte
+open_player = st.button("Open speler")
 
 if open_player:
     if not url.strip():
-        st.error("Please enter a YouTube URL.")
+        st.error("Voer een YouTube-URL in.")
     else:
         video_id = extract_yt_id(url)
         if not video_id:
-            st.error("Could not extract a YouTube video ID from that URL. Please check the URL.")
+            st.error("Kon geen YouTube-video-ID uit deze URL halen. Controleer de URL.")
         else:
             try:
                 base_pad = 1.0
@@ -294,7 +291,7 @@ if open_player:
                 parsed_cuts = parse_ranges_simple(cuts_input)
 
                 if not parsed_ranges:
-                    st.error("No valid ranges parsed. Enter at least one range to play.")
+                    st.error("Geen geldige bereiken geparseerd. Voer minimaal één bereik in om af te spelen.")
                 else:
                     if merge_adjacent:
                         parsed_ranges = merge_intervals_with_pad(parsed_ranges)
@@ -303,7 +300,7 @@ if open_player:
                     final_segments = subtract_cuts_from_padded_segments(parsed_ranges, parsed_cuts)
 
                     if not final_segments:
-                        st.error("No segments remain after applying cuts.")
+                        st.error("Er blijven geen segmenten over na het toepassen van de knipsels.")
                     else:
                         segments_json = json.dumps([[float(s), float(e), float(p)] for (s, e, p) in final_segments])
                         autoplay_flag = "true" if autoplay else "false"
@@ -311,7 +308,7 @@ if open_player:
                         loop_checked = "checked" if loop else ""
                         autoplay_text = str(autoplay).lower()
 
-                        # Build the HTML/JS as a normal string (not an f-string) and do safe replacements.
+                        # HTML/JS bouwen zonder f-string om problemen met '{' '}' te vermijden
                         html = """
 <!doctype html>
 <html>
@@ -363,23 +360,23 @@ if open_player:
     <div id="container" class="card">
       <div id="player"></div>
       <div id="controls">
-        <button id="playAll" class="primary">Play segments</button>
-        <button id="pause">Pause</button>
-        <button id="prev">Prev</button>
-        <button id="next">Next</button>
+        <button id="playAll" class="primary">Speel segmenten</button>
+        <button id="pause">Pauzeer</button>
+        <button id="prev">Vorige</button>
+        <button id="next">Volgende</button>
         <label style="margin-left:8px;">
-          <input type="checkbox" id="loop" {loop_checked}> Loop
+          <input type="checkbox" id="loop" {loop_checked}> Herhalen
         </label>
-        <div class="muted">Autoplay attempt: {autoplay_text}</div>
+        <div class="muted">Poging automatisch afspelen: {autoplay_text}</div>
       </div>
 
       <div id="segments" class="card" style="margin-top:12px;"></div>
-      <div class="hint">Click a pad box and change the value to adjust padding for that segment. Changes take effect immediately.</div>
+      <div class="hint">Klik in het opvulvakje en wijzig de waarde om de padding voor dat segment aan te passen. Wijzigingen worden onmiddellijk toegepast.</div>
     </div>
 
     <script>
       var videoId = "{video_id}";
-      // Each segment: [start, end, pad]
+      // Elk segment: [start, end, pad]
       var segments = {segments_json};
       var currentIndex = 0;
       var checkInterval = null;
@@ -405,12 +402,12 @@ if open_player:
 
       function renderSegments() {
         var el = document.getElementById('segments');
-        var html = '<b>Segments:</b><div style="margin-top:8px">';
+        var html = '<b>Segmenten:</b><div style="margin-top:8px">';
         for (var i=0;i<segments.length;i++) {
           var s = secondsToString(segments[i][0]);
           var e = secondsToString(segments[i][1]);
           var p = (segments[i].length > 2) ? Number(segments[i][2]).toFixed(3) : '1.000';
-          var currentMark = (i === currentIndex) ? '<span class="current">(current)</span>' : '';
+          var currentMark = (i === currentIndex) ? '<span class="current">(huidig)</span>' : '';
           html += '<div class="seg-row">';
           html += '<div class="seg-times"><strong>' + (i+1) + '.</strong>&nbsp;&nbsp;' + s + ' → ' + e + '</div>';
           html += '<div style="margin-left:6px;color:#6b7280;">(pad: </div>';
@@ -431,6 +428,8 @@ if open_player:
         segments[idx][2] = v;
         var inp = document.getElementById('pad_' + idx);
         if (inp) inp.value = v.toFixed(3);
+        // Als dit segment momenteel wordt afgespeeld, gebruikt de intervalchecker de nieuwste pad-waarde
+        // zodat de wijziging direct effect heeft.
       }
 
       (function() {
@@ -468,7 +467,7 @@ if open_player:
       }
 
       function onPlayerStateChange(event) {
-        // no-op; we rely on our timer to progress segments
+        // geen actie; we vertrouwen op de timer om segmenten te vervolgen
       }
 
       function playSegment(idx) {
@@ -505,6 +504,7 @@ if open_player:
           if (!player || typeof player.getCurrentTime !== 'function') return;
           var now = player.getCurrentTime();
 
+          // Haal de actuele pad-waarde (kan door de gebruiker zijn aangepast)
           var rawPad = (segments[currentIndex] && segments[currentIndex].length > 2) ? Number(segments[currentIndex][2]) : 1.0;
           if (!isFinite(rawPad) || rawPad < 0) rawPad = 0;
           var padding = rawPad;
@@ -516,6 +516,7 @@ if open_player:
           var effectiveEnd = end + padding;
           var tolerance = Math.max(0.005, Math.min(0.05, padding * 0.5));
 
+          // Toon de gebruikte (gehoekte) pad in het invoerveld
           var padInput = document.getElementById('pad_' + currentIndex);
           if (padInput) padInput.value = padding.toFixed(3);
 
@@ -580,7 +581,7 @@ if open_player:
   </body>
 </html>
 """
-                        # Do safe replacements for the placeholders used above
+                        # Veilige vervanging van placeholders
                         html = html.replace("{video_id}", video_id)
                         html = html.replace("{segments_json}", segments_json)
                         html = html.replace("{loop_flag}", loop_flag)
@@ -590,4 +591,4 @@ if open_player:
 
                         st.components.v1.html(html, height=720, scrolling=True)
             except Exception as e:
-                st.error(f"Could not parse ranges or apply cuts: {e}")
+                st.error(f"Kon bereiken niet parsen of knipsels niet toepassen: {e}")
