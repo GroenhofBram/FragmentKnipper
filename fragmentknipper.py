@@ -343,7 +343,7 @@ if open_player:
         <div class="muted">Poging automatisch afspelen: {autoplay_text}</div>
       </div>
       <div id="segments" class="card" style="margin-top:12px;"></div>
-      <div class="hint">Klik in het opvulvakje en wijzig de waarde om de padding voor dat segment aan te passen. Wijzigingen worden onmiddellijk toegepast.</div>
+      <div class="hint">Klik in het opvulvakje en wijzig de waarde om de padding voor dat fragment aan te passen.</div>
     </div>
     <script>
       var videoId = "{video_id}";
