@@ -1,4 +1,3 @@
-```python
 import json
 import re
 from urllib.parse import urlparse, parse_qs
@@ -535,4 +534,3 @@ if open_player:
                         st.components.v1.html(html, height=720, scrolling=True)
             except Exception as e:
                 st.error(f"Kon bereiken niet parsen of knipsels niet toepassen: {e}")
-```
