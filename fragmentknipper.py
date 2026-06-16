@@ -184,7 +184,7 @@ with col2:
         "End padding (seconds)",
         min_value=0.0,
         max_value=5.0,
-        value=0.01,
+        value=1,
         step=0.01,
         help="Add a small padding to each requested end time to avoid premature cutting. "
              "If you notice short segments stopping slightly early, increase this a little (e.g. 0.01)."
