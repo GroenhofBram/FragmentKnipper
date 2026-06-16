@@ -375,7 +375,7 @@ if open_player:
         var html = '<b>Fragmenten:</b><div style="margin-top:8px">';
         html += '<div style="margin-top:8px"><b>Padding:</b> zet dit op een groter getal als het fragment te vroeg wordt afgeknipt, zet dit op een lager getal als het fragment te laat wordt afgeknipt.</div>';
         html += '<div style="margin-top:6px"><b>Tip:</b> Als je op "Speel Fragmenten af" klikt, weet je zeker dat dit toegepast wordt! Het zou ook direct moeten werken.</div>';
-        html += '<div style="margin-top:8px">';
+        html += '<div style="margin-top:6px">';
 
         for (var i = 0; i < segments.length; i++) {
           var s = secondsToString(segments[i][0]);
