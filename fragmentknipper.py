@@ -2,12 +2,10 @@ import json
 import re
 from urllib.parse import urlparse, parse_qs
 import streamlit as st
-
 # ---------- Time parsing utilities ----------
 def parse_timepart(t: str) -> float:
     """
     Parse a time string into seconds.
-
     Supported formats:
     - HH:MM:SS(.ms), MM:SS(.ms), SS(.ms)
     - "m.s" is interpreted heuristically:
@@ -20,7 +18,6 @@ def parse_timepart(t: str) -> float:
     t = t.strip()
     if not t:
         raise ValueError("Empty time string")
-
     # HH:MM:SS or MM:SS or SS (with optional decimal part on seconds)
     if ':' in t:
         parts = [p for p in t.split(':') if p != '']
@@ -43,7 +40,6 @@ def parse_timepart(t: str) -> float:
             m = 0
             s = parts_f[0]
         return float(h) * 3600.0 + float(m) * 60.0 + float(s)
-
     # No colon, but contains a dot
     if '.' in t:
         # Heuristic: interpret "m.ss" (minutes.seconds) when it makes sense:
@@ -67,10 +63,8 @@ def parse_timepart(t: str) -> float:
         except ValueError:
             # Fallback to generic float parse
             return float(t)
-
     # Plain integer seconds
     return float(t)
-
 
 def parse_ranges(range_string: str):
     """
@@ -80,14 +74,12 @@ def parse_ranges(range_string: str):
     """
     if not range_string:
         return []
-
     # split by newline or comma
     raw_pieces = []
     for piece in re.split(r'[,\n]+', range_string):
         piece = piece.strip()
         if piece:
             raw_pieces.append(piece)
-
     ranges = []
     for piece in raw_pieces:
         if '-' not in piece:
@@ -99,7 +91,6 @@ def parse_ranges(range_string: str):
             raise ValueError(f"End time must be greater than start time in range '{piece}'")
         ranges.append((start, end))
     return ranges
-
 
 # ---------- YouTube ID extraction ----------
 def extract_yt_id(url: str):
@@ -134,10 +125,8 @@ def extract_yt_id(url: str):
         return m.group(1)
     return None
 
-
 # ---------- Streamlit UI ----------
 st.set_page_config(page_title="YouTube Segment Player", layout="centered")
-
 # Title and intro
 st.markdown(
     "<h1 style='margin-bottom:0.2rem'>YouTube Segment Player — Play only specified parts (no download)</h1>",
@@ -150,7 +139,6 @@ Paste a YouTube link and time ranges (comma or newline separated). Examples of s
 - 1:03-1:20  (MM:SS)
 - 12-15
 - 90-95.5
-
 This app embeds the YouTube player and plays only the segments you specify in sequence using
 the YouTube IFrame API. No video files are downloaded or processed on the server.
 """.strip()
@@ -158,7 +146,6 @@ the YouTube IFrame API. No video files are downloaded or processed on the server
 
 # Layout: left for inputs, right for options
 col1, col2 = st.columns([2, 1])
-
 with col1:
     url = st.text_input("YouTube URL", placeholder="https://www.youtube.com/watch?v=VIDEO_ID")
     ranges_input = st.text_area(
@@ -174,30 +161,27 @@ with col1:
             "- Minutes/seconds: `1:03-1:20`\n"
             "- Decimal seconds: `95.5-100.0`"
         )
-
 with col2:
     st.markdown("Options")
-    # Play by default: set default True so the player attempts to start automatically.
+    # Autoplay checked by default
     autoplay = st.checkbox("Attempt autoplay (may be blocked by browser)", value=True)
-    loop = st.checkbox("Loop segments", value=False)
+    # Loop segments: default ON
+    loop = st.checkbox("Loop segments", value=True)
+    # End padding default set to 1.0
     end_padding = st.number_input(
         "End padding (seconds)",
         min_value=0.0,
         max_value=5.0,
         value=1.0,
-        step=0.5,
+        step=0.1,
         help="Add a small padding to each requested end time to avoid premature cutting. "
-             "If you notice short segments stopping slightly early, increase this a little (e.g. 0.01)."
+             "Default is 1.0 second."
     )
-    merge_adjacent = st.checkbox(
-        "Merge overlapping/adjacent segments",
-        value=False,
-        help="If checked, adjacent or overlapping ranges will be merged into continuous segments."
-    )
+    # Always merge adjacent/overlapping segments
+    merge_adjacent = True
 
 st.write("")  # small spacer
 open_player = st.button("Open Player")
-
 if open_player:
     if not url.strip():
         st.error("Please enter a YouTube URL.")
@@ -211,7 +195,7 @@ if open_player:
                 if not ranges:
                     st.error("No valid ranges parsed. Enter at least one range.")
                 else:
-                    # Optionally merge overlapping/adjacent segments
+                    # Optionally merge overlapping/adjacent segments (now always enabled)
                     if merge_adjacent:
                         eps = 1e-6
                         ranges = sorted(ranges, key=lambda x: x[0])
@@ -225,12 +209,10 @@ if open_player:
                                 cur_s, cur_e = s, e
                         merged.append((cur_s, cur_e))
                         ranges = merged
-
                     # Build the HTML + JS that uses YouTube IFrame API
                     segments_json = json.dumps([[float(s), float(e)] for (s, e) in ranges])
                     autoplay_flag = "true" if autoplay else "false"
                     loop_flag = "true" if loop else "false"
-
                     # Sizing: responsive width; improved readability styles
                     html = f"""
 <!doctype html>
@@ -291,7 +273,6 @@ if open_player:
       <div id="segments" class="card" style="margin-top:12px;"></div>
       <div class="hint">Keyboard: Space = Play/Pause, n = next, p = prev</div>
     </div>
-
     <script>
       var videoId = "{video_id}";
       var segments = {segments_json};
@@ -301,7 +282,6 @@ if open_player:
       var userLoop = {loop_flag};
       var autoplay = {autoplay_flag};
       var endPadding = {end_padding};  // seconds
-
       function renderSegments() {{
         var el = document.getElementById('segments');
         var html = '<b>Segments:</b><ol>';
@@ -312,16 +292,13 @@ if open_player:
         html += '</ol>';
         el.innerHTML = html;
       }}
-
       // Improved secondsToString: preserves fractional seconds (two decimals)
       function secondsToString(s) {{
         var total = Number(s);
         if (!isFinite(total)) return String(s);
-
         var h = Math.floor(total / 3600);
         var m = Math.floor((total % 3600) / 60);
         var sec = total % 60;
-
         // integer and fractional parts for seconds
         var secInt = Math.floor(sec);
         var frac = sec - secInt;
@@ -329,20 +306,17 @@ if open_player:
         var fracStr = (frac > 0) ? frac.toFixed(2).substring(1) : '.00';
         // seconds with two-decimal fraction, padded to 2 digits before decimal
         var secStr = String(secInt).padStart(2, '0') + fracStr;
-
         if (h > 0) {{
           return h + ':' + String(m).padStart(2, '0') + ':' + secStr;
         }}
         return String(m) + ':' + secStr;
       }}
-
       // Load YouTube IFrame API
       (function() {{
         var tag = document.createElement('script');
         tag.src = "https://www.youtube.com/iframe_api";
         document.head.appendChild(tag);
       }})();
-
       function onYouTubeIframeAPIReady() {{
         player = new YT.Player('player', {{
           height: '390',
@@ -360,7 +334,6 @@ if open_player:
           }}
         }});
       }}
-
       function onPlayerReady(event) {{
         renderSegments();
         // Attempt to play segments immediately if autoplay requested.
@@ -372,11 +345,9 @@ if open_player:
           }}, 250);
         }}
       }}
-
       function onPlayerStateChange(event) {{
         // no-op; we rely on our timer to progress segments
       }}
-
       function playSegment(idx) {{
         if (!player) return;
         if (idx < 0) idx = 0;
@@ -384,7 +355,7 @@ if open_player:
           if (userLoop) {{
             idx = 0;
           }} else {{
-            try {{ player.pauseVideo(); }} catch(e) {{}} 
+            try {{ player.pauseVideo(); }} catch(e) {{}}
             return;
           }}
         }}
@@ -392,7 +363,6 @@ if open_player:
         var start = Number(segments[currentIndex][0]);
         var end = Number(segments[currentIndex][1]);
         var segLength = Math.max(0.0, end - start);
-
         // Decide padding for this segment; keep it conservative for very short segments.
         var padding = Number(endPadding);
         if (segLength > 0) {{
@@ -402,13 +372,11 @@ if open_player:
           padding = Math.max(0.001, padding);
         }}
         var effectiveEnd = end + padding;
-
         // Clear any previous interval before seeking/playing
         if (checkInterval) {{
           clearInterval(checkInterval);
           checkInterval = null;
         }}
-
         // Seek and play with a short delay to improve reliability for tiny segments.
         setTimeout(function() {{
           try {{ player.seekTo(start, true); }} catch(e) {{ console.warn(e); }}
@@ -418,17 +386,13 @@ if open_player:
             try {{ player.playVideo(); }} catch(e) {{ /* ignore */ }}
           }}, 120);
         }}, 40);
-
         // Tolerance: small value; ensure we don't advance before actually reaching start.
         var tolerance = Math.max(0.005, Math.min(0.05, padding * 0.5));
-
         // Choose check frequency: faster for very short segments
         var checkFreq = segLength < 0.25 ? 30 : 100;
-
         checkInterval = setInterval(function() {{
           if (!player || typeof player.getCurrentTime !== 'function') return;
           var now = player.getCurrentTime();
-
           // Only consider advancing after we've definitely started the segment.
           if (now >= start - 0.02 && now >= (effectiveEnd - tolerance)) {{
             clearInterval(checkInterval);
@@ -446,10 +410,8 @@ if open_player:
             renderSegments();
           }}
         }}, checkFreq);
-
         renderSegments();
       }}
-
       document.getElementById('playAll').addEventListener('click', function() {{
         userLoop = document.getElementById('loop').checked;
         playSegment(0);
@@ -469,7 +431,6 @@ if open_player:
         checkInterval = null;
         playSegment(Math.max(0, currentIndex - 1));
       }});
-
       // Keyboard shortcuts
       document.addEventListener('keydown', function(e) {{
         if (e.key === ' ') {{
