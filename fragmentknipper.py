@@ -225,6 +225,8 @@ Voorbeelden van ondersteunde tijdformaten:
 - 1:03-1:20  (MM:SS)
 - 01:04- 3.04
 Extra tekst zoals "(knip)" of andere annotaties wordt automatisch genegeerd.
+
+Zo kun je het fragment bekijken zoals voorgesteld is met de knipsels, dan hoef je niet de hele tijd rond te klikken! :-)
 """.strip()
 )
 
