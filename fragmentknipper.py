@@ -283,7 +283,7 @@ Extra text like "(knip)" or other annotations will be ignored automatically.
 Per-section padding:
 - You can specify a per-range padding with `|<seconds>` or `pad:<seconds>`.
 - If not provided the base padding used is 1.0 second.
-- After the player loads, you can edit each segment's padding inline in the segments box.
+- After the player loads, you can edit each segment's padding inline in the segments box; changes apply immediately.
 """.strip()
 )
 
@@ -465,11 +465,17 @@ if open_player:
       function onPadInput(idx, val) {{
         var v = parseFloat(val);
         if (!isFinite(v) || v < 0) v = 0;
-        // clamp to reasonable range
         if (v > 5) v = 5;
+        // store the new pad value immediately
+        if (!Array.isArray(segments[idx])) return;
         segments[idx][2] = v;
-        // no need to re-render entire list; keep input as-is. But update any other UI dependent on pad if needed.
-      }}
+        // update the input value to the sanitized value (preserve focus)
+        var inp = document.getElementById('pad_' + idx);
+        if (inp) inp.value = v.toFixed(3);
+        // If the changed segment is currently playing, we don't restart it;
+        // the running interval recalculates the effective end using the latest pad value,
+        // so changes take effect immediately (including immediate advancement if new pad makes effectiveEnd <= now).
+      }
 
       // Load YouTube IFrame API
       (function() {{
@@ -525,24 +531,14 @@ if open_player:
         var start = Number(segments[currentIndex][0]);
         var end = Number(segments[currentIndex][1]);
         var segLength = Math.max(0.0, end - start);
-        var pad = (segments[currentIndex].length > 2) ? Number(segments[currentIndex][2]) : 1.0;
-        var padding = Number(pad);
-        if (segLength > 0) {{
-          padding = Math.min(padding, Math.max(0.001, segLength / 4));
-        }} else {{
-          padding = Math.max(0.001, padding);
-        }}
-        var effectiveEnd = end + padding;
 
-        // ensure the input field shows the currently used padding (in case clamping occurred)
-        var padInput = document.getElementById('pad_' + currentIndex);
-        if (padInput) padInput.value = padding.toFixed(3);
-
+        // Clear any previous interval before seeking/playing
         if (checkInterval) {{
           clearInterval(checkInterval);
           checkInterval = null;
         }}
 
+        // Seek and play with a short delay to improve reliability for tiny segments.
         setTimeout(function() {{
           try {{ player.seekTo(start, true); }} catch(e) {{ console.warn(e); }}
           try {{ player.playVideo(); }} catch(e) {{ console.warn(e); }}
@@ -551,11 +547,30 @@ if open_player:
           }}, 120);
         }}, 40);
 
-        var tolerance = Math.max(0.005, Math.min(0.05, padding * 0.5));
+        // Tolerance: will be recalculated each tick based on current pad value.
         var checkFreq = segLength < 0.25 ? 30 : 100;
         checkInterval = setInterval(function() {{
           if (!player || typeof player.getCurrentTime !== 'function') return;
           var now = player.getCurrentTime();
+
+          // get the latest pad for the currentIndex (may have been changed by user)
+          var rawPad = (segments[currentIndex] && segments[currentIndex].length > 2) ? Number(segments[currentIndex][2]) : 1.0;
+          if (!isFinite(rawPad) || rawPad < 0) rawPad = 0;
+          // clamp pad relative to segment length like the server-side logic:
+          var padding = rawPad;
+          if (segLength > 0) {{
+            padding = Math.min(padding, Math.max(0.001, segLength / 4));
+          }} else {{
+            padding = Math.max(0.001, padding);
+          }}
+          var effectiveEnd = end + padding;
+          var tolerance = Math.max(0.005, Math.min(0.05, padding * 0.5));
+
+          // update the pad input to reflect clamped value (so UI shows what's actually used)
+          var padInput = document.getElementById('pad_' + currentIndex);
+          if (padInput) padInput.value = padding.toFixed(3);
+
+          // Only consider advancing after we've definitely started the segment.
           if (now >= start - 0.02 && now >= (effectiveEnd - tolerance)) {{
             clearInterval(checkInterval);
             checkInterval = null;
