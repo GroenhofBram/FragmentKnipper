@@ -11,8 +11,6 @@ def parse_timepart(t: str) -> float:
     - HH:MM:SS(.ms), MM:SS(.ms), SS(.ms)
     - "m.s" is interpreted heuristically:
         * If integer part >= 1 and fractional part looks like seconds (0-59), it's treated as M.S (minutes.seconds).
-          e.g. "1.03" -> 1 minute 3 seconds (63s)
-        * Otherwise it's treated as decimal seconds: "95.5" -> 95.5s, "0.02" -> 0.02s
     """
     if t is None:
         raise ValueError("Empty time string")
@@ -51,7 +49,7 @@ def parse_timepart(t: str) -> float:
         try:
             li = int(left)
             # If integer part >= 1 and the fractional part looks like seconds (<60 and up to two digits),
-            # treat it as minutes.seconds. This covers inputs like "1.03" -> 1 minute 3 seconds.
+            # treat it as minutes.seconds.
             if li >= 1 and re.fullmatch(r'\d{1,2}$', right):
                 ri = int(right)
                 if 0 <= ri < 60:
@@ -65,47 +63,114 @@ def parse_timepart(t: str) -> float:
     return float(t)
 
 
-def parse_ranges(range_string: str):
+# ---------- Range parsing (with optional per-range padding) ----------
+def parse_ranges_with_padding(range_string: str, default_pad: float):
     """
     Parse a string containing comma/newline separated time ranges.
-    This version tolerates extra text (like "(knip)" or other words) and will ignore
-    non-time text. It returns a list of (start_seconds, end_seconds) tuples.
-
-    It looks for the first time-range-like pattern inside each comma/newline-separated piece.
-    Accepts formats like:
-      - 0.02-0.05
-      - 1:03-1:20
-      - 12-15
-      - 90-95.5
+    This tolerates extra text (like "(knip)" or other words) and will ignore non-time text.
+    Additionally, a per-range padding can be provided after the range using either:
+      - "|<number>"  e.g. "0.00-4.43|0.2"
+      - "pad:<number>" or "pad=<number>" or "pad <number>"
+      - "p:<number>" or "p=<number>"
+    If no padding is specified for a range, default_pad will be assigned.
+    Returns a list of (start_seconds, end_seconds, padding_seconds).
     """
     if not range_string:
         return []
-    # Remove parenthetical text (like "(knip)") everywhere
+    # Remove parenthetical text (like "(knip)") to simplify parsing
     s = re.sub(r'\([^)]*\)', '', range_string)
     pieces = [p.strip() for p in re.split(r'[,\n]+', s) if p.strip()]
     ranges = []
     # regex to capture start and end time tokens (allows different dash characters and spaces)
-    rng_re = re.compile(
-        r'(\d+(?::\d+){0,2}(?:\.\d+)?)[\s\-–—]+(\d+(?::\d+){0,2}(?:\.\d+)?)'
-    )
+    rng_re = re.compile(r'(\d+(?::\d+){0,2}(?:\.\d+)?)[\s\-–—]+(\d+(?::\d+){0,2}(?:\.\d+)?)')
+    pad_re_list = [
+        re.compile(r'\|\s*([0-9]+(?:\.\d+)?)'),                 # |0.2
+        re.compile(r'pad[:=]?\s*([0-9]+(?:\.\d+)?)', re.I),     # pad:0.2 or pad=0.2 or pad 0.2
+        re.compile(r'\bp[:=]?\s*([0-9]+(?:\.\d+)?)\b', re.I),   # p:0.2 or p=0.2
+    ]
     for piece in pieces:
         m = rng_re.search(piece)
         if not m:
-            # ignore non-matching fragments (user requested text like "(knip)" to be ignored)
+            # ignore non-matching fragments
             continue
         a, b = m.group(1), m.group(2)
-        start = parse_timepart(a.strip())
-        end = parse_timepart(b.strip())
+        try:
+            start = parse_timepart(a.strip())
+            end = parse_timepart(b.strip())
+        except Exception:
+            continue
         if end <= start:
-            # skip invalid ranges
+            continue
+        # find padding in the remainder of the piece, after the matched range
+        pad = None
+        tail = piece[m.end():]
+        for pre in pad_re_list:
+            pm = pre.search(tail)
+            if pm:
+                try:
+                    pad = float(pm.group(1))
+                except Exception:
+                    pad = None
+                break
+        if pad is None:
+            pad = float(default_pad)
+        ranges.append((start, end, float(pad)))
+    return ranges
+
+
+# ---------- Simple ranges parser for cuts (no padding) ----------
+def parse_ranges_simple(range_string: str):
+    """
+    Parse ranges for cuts. Ignore parenthetical annotations.
+    Returns list of (start_seconds, end_seconds).
+    """
+    if not range_string:
+        return []
+    s = re.sub(r'\([^)]*\)', '', range_string)
+    pieces = [p.strip() for p in re.split(r'[,\n]+', s) if p.strip()]
+    ranges = []
+    rng_re = re.compile(r'(\d+(?::\d+){0,2}(?:\.\d+)?)[\s\-–—]+(\d+(?::\d+){0,2}(?:\.\d+)?)')
+    for piece in pieces:
+        m = rng_re.search(piece)
+        if not m:
+            continue
+        a, b = m.group(1), m.group(2)
+        try:
+            start = parse_timepart(a.strip())
+            end = parse_timepart(b.strip())
+        except Exception:
+            continue
+        if end <= start:
             continue
         ranges.append((start, end))
     return ranges
 
 
 # ---------- Interval utilities ----------
+def merge_intervals_with_pad(intervals_with_pad, eps=1e-6):
+    """
+    Merge overlapping/adjacent intervals while preserving/combining padding.
+    intervals_with_pad: list of (s,e,p)
+    When merging multiple intervals the resulting padding is set to the max padding among them.
+    """
+    if not intervals_with_pad:
+        return []
+    intervals_with_pad = sorted(intervals_with_pad, key=lambda x: x[0])
+    merged = []
+    cur_s, cur_e, cur_p = intervals_with_pad[0]
+    for s, e, p in intervals_with_pad[1:]:
+        if s <= cur_e + eps:
+            cur_e = max(cur_e, e)
+            cur_p = max(cur_p, p)
+        else:
+            merged.append((cur_s, cur_e, cur_p))
+            cur_s, cur_e, cur_p = s, e, p
+    merged.append((cur_s, cur_e, cur_p))
+    return merged
+
+
 def merge_intervals(intervals, eps=1e-6):
-    """Sort and merge overlapping/adjacent intervals."""
+    """Sort and merge overlapping/adjacent intervals. intervals is list of (s,e)."""
     if not intervals:
         return []
     intervals = sorted(intervals, key=lambda x: x[0])
@@ -121,51 +186,61 @@ def merge_intervals(intervals, eps=1e-6):
     return merged
 
 
-def subtract_intervals(segments, cuts):
+def subtract_cuts_from_padded_segments(segments_with_pad, cuts):
     """
-    Subtract 'cuts' from 'segments'. Both inputs expected as lists of (s,e).
-    Returns list of resulting segments after removal.
+    segments_with_pad: list of (s,e,p)
+    cuts: list of (cs,ce)
+    Returns list of (s,e,p) where cuts have been removed and each resulting piece inherits the original p.
     """
-    if not segments:
+    if not segments_with_pad:
         return []
     if not cuts:
-        return merge_intervals(segments)
+        # Nothing to cut; simply return merged segments (already expected merged)
+        return list(segments_with_pad)
 
     cuts = merge_intervals(cuts)
     result = []
-    for s, e in merge_intervals(segments):
+    for s, e, p in segments_with_pad:
         cur = s
         for cs, ce in cuts:
             if ce <= cur:
-                # cut ends before current start
                 continue
             if cs >= e:
-                # cuts start after segment end; no more overlaps
                 break
             # overlap exists
             if cs <= cur and ce >= e:
-                # cut covers entire segment -> nothing left
+                # cut covers entire segment
                 cur = e
                 break
             if cs <= cur < ce < e:
-                # cut covers start portion of segment -> move start forward
                 cur = ce
                 continue
             if cur < cs < e <= ce:
-                # cut covers the tail of the segment -> keep head and finish
                 if cs - cur > 1e-9:
-                    result.append((cur, cs))
+                    result.append((cur, cs, p))
                 cur = e
                 break
             if cur < cs and ce < e:
-                # cut is inside segment -> keep head portion, then continue after cut
                 if cs - cur > 1e-9:
-                    result.append((cur, cs))
+                    result.append((cur, cs, p))
                 cur = ce
                 continue
         if cur < e - 1e-9:
-            result.append((cur, e))
-    return merge_intervals(result)
+            result.append((cur, e, p))
+    # final merge to collapse adjacent pieces that may have been produced by multiple cuts
+    # but keep per-piece padding: only merge adjacent pieces if their padding is equal (to preserve per-section behavior)
+    if not result:
+        return []
+    merged = []
+    cur_s, cur_e, cur_p = result[0]
+    for s, e, p in result[1:]:
+        if s <= cur_e + 1e-6 and abs(p - cur_p) < 1e-9:
+            cur_e = max(cur_e, e)
+        else:
+            merged.append((cur_s, cur_e, cur_p))
+            cur_s, cur_e, cur_p = s, e, p
+    merged.append((cur_s, cur_e, cur_p))
+    return merged
 
 
 # ---------- YouTube ID extraction ----------
@@ -209,8 +284,12 @@ Paste a YouTube link and time ranges (comma or newline separated). Examples of s
 - 12-15
 - 90-95.5
 
-You can also provide "Sections to cut" — time ranges that will be removed from the playback segments.
+You can also provide "Sections to cut" — time ranges that will be removed from the playback.
 Extra text like "(knip)" or other annotations will be ignored automatically.
+
+Per-section padding:
+- You can specify a per-section padding after a range using `|<seconds>` or `pad:<seconds>` (e.g. `0.00-4.43|0.2`).
+- If you don't specify a per-section padding, the Default padding value (below) is used.
 """.strip()
 )
 
@@ -219,10 +298,10 @@ col1, col2 = st.columns([2, 1])
 with col1:
     url = st.text_input("YouTube URL", placeholder="https://www.youtube.com/watch?v=VIDEO_ID")
     ranges_input = st.text_area(
-        "Time ranges to play (comma or newline separated)",
+        "Time ranges to play (comma or newline separated). You may add per-range padding with '|0.2' or 'pad:0.2'.",
         value="0.00-4.43",
-        height=140,
-        help="Examples: 0.02-0.05, 1:03-1:20, 12-15, 90-95.5\nText like '(knip)' will be ignored."
+        height=160,
+        help="Examples: 0.02-0.05|0.2, 1:03-1:20 pad:0.5, 12-15"
     )
     cuts_input = st.text_area(
         "Sections to cut (these will be removed from the playback)",
@@ -233,24 +312,24 @@ with col1:
     example_expander = st.expander("Show example inputs")
     with example_expander:
         st.markdown(
-            "- Play ranges: `0.00-4.43`\n"
+            "- Play ranges: `0.00-4.43|0.1` (plays 0.00→4.43 with 0.1s padding at the end)\n"
             "- Cuts: `3.12-3.32 (knip), 4.44-5.21 (knip)`\n"
-            "- Resulting segments shown in the player will have the cuts removed."
+            "- If you omit the per-range padding, the Default padding (on the right) will be used."
         )
 
 with col2:
     st.markdown("Options")
     autoplay = st.checkbox("Attempt autoplay (may be blocked by browser)", value=True)
     loop = st.checkbox("Loop segments", value=True)
-    end_padding = st.number_input(
-        "End padding (seconds)",
+    default_padding = st.number_input(
+        "Default padding (seconds) for sections without per-range padding",
         min_value=0.0,
         max_value=5.0,
-        value=1.0,
+        value=1.0,  # base value should always be 1 as requested
         step=0.1,
-        help="Add padding to each requested end time to avoid premature cutting. Default 1.0s."
+        help="Per-section padding overrides this value. Default is 1.0 second."
     )
-    # Always merge adjacent/overlapping segments
+    # Merge adjacent/overlapping segments is always on as requested
     merge_adjacent = True
 
 st.write("")  # small spacer
@@ -265,25 +344,28 @@ if open_player:
             st.error("Could not extract a YouTube video ID from that URL. Please check the URL.")
         else:
             try:
-                parsed_ranges = parse_ranges(ranges_input)
-                parsed_cuts = parse_ranges(cuts_input)
+                # parse play ranges (with optional per-range padding)
+                parsed_ranges = parse_ranges_with_padding(ranges_input, default_padding)
+                # parse cuts (simple ranges)
+                parsed_cuts = parse_ranges_simple(cuts_input)
 
                 if not parsed_ranges:
                     st.error("No valid ranges parsed. Enter at least one range to play.")
                 else:
                     # Merge ranges and cuts
                     if merge_adjacent:
-                        parsed_ranges = merge_intervals(parsed_ranges)
+                        parsed_ranges = merge_intervals_with_pad(parsed_ranges)
                         parsed_cuts = merge_intervals(parsed_cuts)
 
-                    # Subtract cuts from the main ranges
-                    final_segments = subtract_intervals(parsed_ranges, parsed_cuts)
+                    # Subtract cuts from the main ranges, preserving per-section padding
+                    final_segments = subtract_cuts_from_padded_segments(parsed_ranges, parsed_cuts)
 
                     if not final_segments:
                         st.error("No segments remain after applying cuts.")
                     else:
-                        # Build HTML/JS player
-                        segments_json = json.dumps([[float(s), float(e)] for (s, e) in final_segments])
+                        # Build HTML/JS player:
+                        # segments JSON will be list of [start, end, pad]
+                        segments_json = json.dumps([[float(s), float(e), float(p)] for (s, e, p) in final_segments])
                         autoplay_flag = "true" if autoplay else "false"
                         loop_flag = "true" if loop else "false"
                         html = f"""
@@ -347,23 +429,29 @@ if open_player:
     </div>
     <script>
       var videoId = "{video_id}";
+      // segments are [start, end, pad]
       var segments = {segments_json};
       var currentIndex = 0;
       var checkInterval = null;
       var player = null;
       var userLoop = {loop_flag};
       var autoplay = {autoplay_flag};
-      var endPadding = {end_padding};  // seconds
+      var defaultPadding = {default_padding};  // fallback if segment doesn't have a pad
+
       function renderSegments() {{
         var el = document.getElementById('segments');
         var html = '<b>Segments:</b><ol>';
         for (var i=0;i<segments.length;i++) {{
           var cls = (i === currentIndex) ? ' <strong class="current">(current)</strong>' : '';
-          html += '<li><code>' + secondsToString(segments[i][0]) + '</code> → <code>' + secondsToString(segments[i][1]) + '</code>' + cls + '</li>';
+          var s = secondsToString(segments[i][0]);
+          var e = secondsToString(segments[i][1]);
+          var p = (segments[i].length > 2) ? Number(segments[i][2]) : defaultPadding;
+          html += '<li><code>' + s + '</code> → <code>' + e + '</code> <span style="color:#6b7280;margin-left:8px;">(pad: ' + p + 's)</span>' + cls + '</li>';
         }}
         html += '</ol>';
         el.innerHTML = html;
       }}
+
       function secondsToString(s) {{
         var total = Number(s);
         if (!isFinite(total)) return String(s);
@@ -379,11 +467,13 @@ if open_player:
         }}
         return String(m) + ':' + secStr;
       }}
+
       (function() {{
         var tag = document.createElement('script');
         tag.src = "https://www.youtube.com/iframe_api";
         document.head.appendChild(tag);
       }})();
+
       function onYouTubeIframeAPIReady() {{
         player = new YT.Player('player', {{
           height: '390',
@@ -401,6 +491,7 @@ if open_player:
           }}
         }});
       }}
+
       function onPlayerReady(event) {{
         renderSegments();
         if (autoplay) {{
@@ -410,9 +501,11 @@ if open_player:
           }}, 250);
         }}
       }}
+
       function onPlayerStateChange(event) {{
         // no-op; we rely on our timer to progress segments
       }}
+
       function playSegment(idx) {{
         if (!player) return;
         if (idx < 0) idx = 0;
@@ -428,17 +521,20 @@ if open_player:
         var start = Number(segments[currentIndex][0]);
         var end = Number(segments[currentIndex][1]);
         var segLength = Math.max(0.0, end - start);
-        var padding = Number(endPadding);
+        var pad = (segments[currentIndex].length > 2) ? Number(segments[currentIndex][2]) : defaultPadding;
+        var padding = Number(pad);
         if (segLength > 0) {{
           padding = Math.min(padding, Math.max(0.001, segLength / 4));
         }} else {{
           padding = Math.max(0.001, padding);
         }}
         var effectiveEnd = end + padding;
+
         if (checkInterval) {{
           clearInterval(checkInterval);
           checkInterval = null;
         }}
+
         setTimeout(function() {{
           try {{ player.seekTo(start, true); }} catch(e) {{ console.warn(e); }}
           try {{ player.playVideo(); }} catch(e) {{ console.warn(e); }}
@@ -446,6 +542,7 @@ if open_player:
             try {{ player.playVideo(); }} catch(e) {{ /* ignore */ }}
           }}, 120);
         }}, 40);
+
         var tolerance = Math.max(0.005, Math.min(0.05, padding * 0.5));
         var checkFreq = segLength < 0.25 ? 30 : 100;
         checkInterval = setInterval(function() {{
@@ -469,6 +566,7 @@ if open_player:
         }}, checkFreq);
         renderSegments();
       }}
+
       document.getElementById('playAll').addEventListener('click', function() {{
         userLoop = document.getElementById('loop').checked;
         playSegment(0);
