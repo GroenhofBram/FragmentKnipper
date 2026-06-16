@@ -364,7 +364,9 @@ if open_player:
       }
       function renderSegments() {
         var el = document.getElementById('segments');
-        var html = '<b>Segmenten:</b><div style="margin-top:8px">';
+        var html = '<b>Fragmenten:</b><div style="margin-top:8px">';
+        var html = '<b>Padding: zet dit op een groter getal als het fragment te vroeg wordt afgeknipt, zet dit op een lager getal als het fragment te laat wordt afgeknipt.:</b><div style="margin-top:8px">';
+                var html = '<b>Als je op 'Speel fragmenten af' klikt, weet je zeker dat dit toegepast wordt! Zou ook zonder moeten werken ;-)':</b><div style="margin-top:6px">';
         for (var i=0;i<segments.length;i++) {
           var s = secondsToString(segments[i][0]);
           var e = secondsToString(segments[i][1]);
