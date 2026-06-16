@@ -219,7 +219,7 @@ st.set_page_config(page_title="Fragmentenspeler - YouTube", layout="centered")
 st.markdown("<h1 style='margin-bottom:0.2rem'>YouTube Fragmentenspeler — Speel alleen opgegeven fragmentdelen af.</h1>", unsafe_allow_html=True)
 st.markdown(
     """
-Plak een YouTube-link en geef aan welke delen je in het fragment wil (gescheiden door komma's of nieuwe regels). Vul bij "Delen om te knippen" eventueel in welke delen eruit moeten. Je kunt beide tegelijk invullen, dan wordt
+Plak een YouTube-link en geef aan welke delen je in het fragment wil (gescheiden door komma's of nieuwe regels). Vul bij "Delen om te knippen" eventueel in welke delen eruit moeten. Je kunt beide tegelijk invullen.
 Voorbeelden van ondersteunde tijdformaten:
 - 0.02-0.05  (decimale seconden)
 - 1:03-1:20  (MM:SS)
@@ -227,6 +227,7 @@ Voorbeelden van ondersteunde tijdformaten:
 Extra tekst zoals "(knip)" of andere annotaties wordt automatisch genegeerd.
 """.strip()
 )
+
 # Layout: links invoer, rechts opties
 col1, col2 = st.columns([2, 1])
 with col1:
@@ -243,11 +244,13 @@ with col1:
     )
 with col2:
     st.markdown("Opties")
-    autoplay = st.checkbox("Speel bij klikken op 'Open speler' automatisch af (kan door browser worden geblokkeerd).", value=True)
-    loop = st.checkbox("Speel fragmenten eindeloos af in een loop", value=True)
+    autoplay = st.checkbox("Speel bij openen automatisch af (kan door browser worden geblokkeerd).", value=True)
+    loop = st.checkbox("Speel fragmenten in een loop", value=True)
     merge_adjacent = True  # altijd aan
+
 st.write("")  # kleine ruimte
 open_player = st.button("Open speler")
+
 if open_player:
     if not url.strip():
         st.error("Voer een YouTube-URL in.")
@@ -268,13 +271,14 @@ if open_player:
                         parsed_cuts = merge_intervals(parsed_cuts)
                     final_segments = subtract_cuts_from_padded_segments(parsed_ranges, parsed_cuts)
                     if not final_segments:
-                        st.error("Er blijven geen fragmenten over na het toepassen van de knipsels, is de input correct?.")
+                        st.error("Er blijven geen fragmenten over na het toepassen van de knipsels. Controleer de input.")
                     else:
                         segments_json = json.dumps([[float(s), float(e), float(p)] for (s, e, p) in final_segments])
                         autoplay_flag = "true" if autoplay else "false"
                         loop_flag = "true" if loop else "false"
                         loop_checked = "checked" if loop else ""
                         autoplay_text = str(autoplay).lower()
+
                         # HTML/JS bouwen zonder f-string om problemen met '{' '}' te vermijden
                         html = """
 <!doctype html>
@@ -347,6 +351,7 @@ if open_player:
       var player = null;
       var userLoop = {loop_flag};
       var autoplay = {autoplay_flag};
+
       function secondsToString(s) {
         var total = Number(s);
         if (!isFinite(total)) return String(s);
@@ -362,12 +367,17 @@ if open_player:
         }
         return String(m) + ':' + secStr;
       }
+
       function renderSegments() {
         var el = document.getElementById('segments');
+
+        // instructies bovenaan (gebruik html += om toe te voegen, niet opnieuw var html = ...)
         var html = '<b>Fragmenten:</b><div style="margin-top:8px">';
-        var html = '<b>Padding: zet dit op een groter getal als het fragment te vroeg wordt afgeknipt, zet dit op een lager getal als het fragment te laat wordt afgeknipt.:</b><div style="margin-top:8px">';
-        var html = '<b>Als je op 'Speel fragmenten af' klikt, weet je zeker dat dit toegepast wordt! Zou ook zonder moeten werken ;-)':</b><div style="margin-top:6px">';
-        for (var i=0;i<segments.length;i++) {
+        html += '<div style="margin-top:8px"><b>Padding:</b> zet dit op een groter getal als het fragment te vroeg wordt afgeknipt, zet dit op een lager getal als het fragment te laat wordt afgeknipt.</div>';
+        html += '<div style="margin-top:6px"><b>Tip:</b> Als je op "Speel Fragmenten af" klikt, weet je zeker dat dit toegepast wordt! Het zou ook direct moeten werken.</div>';
+        html += '<div style="margin-top:8px">';
+
+        for (var i = 0; i < segments.length; i++) {
           var s = secondsToString(segments[i][0]);
           var e = secondsToString(segments[i][1]);
           var p = (segments[i].length > 2) ? Number(segments[i][2]).toFixed(1) : '1.0';
@@ -380,9 +390,11 @@ if open_player:
           html += currentMark;
           html += '</div>';
         }
-        html += '</div>';
+
+        html += '</div>'; // sluit inner container
         el.innerHTML = html;
       }
+
       function onPadInput(idx, val) {
         var v = parseFloat(val);
         if (!isFinite(v) || v < 0) v = 0;
@@ -391,12 +403,16 @@ if open_player:
         segments[idx][2] = v;
         var inp = document.getElementById('pad_' + idx);
         if (inp) inp.value = v.toFixed(1);
+        // Als dit fragment momenteel wordt afgespeeld, gebruikt de checker de nieuwste pad-waarde,
+        // zodat de wijziging direct effect heeft.
       }
+
       (function() {
         var tag = document.createElement('script');
         tag.src = "https://www.youtube.com/iframe_api";
         document.head.appendChild(tag);
       })();
+
       function onYouTubeIframeAPIReady() {
         player = new YT.Player('player', {
           height: '390',
@@ -414,6 +430,7 @@ if open_player:
           }
         });
       }
+
       function onPlayerReady(event) {
         renderSegments();
         if (autoplay) {
@@ -423,8 +440,11 @@ if open_player:
           }, 250);
         }
       }
+
       function onPlayerStateChange(event) {
+        // geen actie; we vertrouwen op de timer om fragmenten te vervolgen
       }
+
       function playSegment(idx) {
         if (!player) return;
         if (idx < 0) idx = 0;
@@ -440,21 +460,26 @@ if open_player:
         var start = Number(segments[currentIndex][0]);
         var end = Number(segments[currentIndex][1]);
         var segLength = Math.max(0.0, end - start);
+
         if (checkInterval) {
           clearInterval(checkInterval);
           checkInterval = null;
         }
+
         setTimeout(function() {
           try { player.seekTo(start, true); } catch(e) { console.warn(e); }
           try { player.playVideo(); } catch(e) { console.warn(e); }
           setTimeout(function() {
-            try { player.playVideo(); } catch(e) { }
+            try { player.playVideo(); } catch(e) { /* ignore */ }
           }, 120);
         }, 40);
+
         var checkFreq = segLength < 0.25 ? 30 : 100;
         checkInterval = setInterval(function() {
           if (!player || typeof player.getCurrentTime !== 'function') return;
           var now = player.getCurrentTime();
+
+          // Haal de actuele pad-waarde (kan door de gebruiker zijn aangepast)
           var rawPad = (segments[currentIndex] && segments[currentIndex].length > 2) ? Number(segments[currentIndex][2]) : 1.0;
           if (!isFinite(rawPad) || rawPad < 0) rawPad = 0;
           var padding = rawPad;
@@ -465,8 +490,11 @@ if open_player:
           }
           var effectiveEnd = end + padding;
           var tolerance = Math.max(0.005, Math.min(0.05, padding * 0.5));
+
+          // Toon de gebruikte (geklampte) pad in het invoerveld
           var padInput = document.getElementById('pad_' + currentIndex);
           if (padInput) padInput.value = padding.toFixed(1);
+
           if (now >= start - 0.02 && now >= (effectiveEnd - tolerance)) {
             clearInterval(checkInterval);
             checkInterval = null;
@@ -477,7 +505,7 @@ if open_player:
               if (userLoop) {
                 playSegment(0);
               } else {
-                try { player.pauseVideo(); } catch(e) { }
+                try { player.pauseVideo(); } catch(e) { /* ignore */ }
               }
             }
             renderSegments();
@@ -485,12 +513,13 @@ if open_player:
         }, checkFreq);
         renderSegments();
       }
+
       document.getElementById('playAll').addEventListener('click', function() {
         userLoop = document.getElementById('loop').checked;
         playSegment(0);
       });
       document.getElementById('pause').addEventListener('click', function() {
-        if (player) try { player.pauseVideo(); } catch(e) { }
+        if (player) try { player.pauseVideo(); } catch(e) { /* ignore */ }
         if (checkInterval) clearInterval(checkInterval);
         checkInterval = null;
       });
@@ -509,11 +538,11 @@ if open_player:
           if (player) {
             var state = player.getPlayerState();
             if (state === YT.PlayerState.PLAYING) {
-              try { player.pauseVideo(); } catch(e) { }
+              try { player.pauseVideo(); } catch(e) { /* ignore */ }
               if (checkInterval) clearInterval(checkInterval);
               checkInterval = null;
             } else {
-              try { player.playVideo(); } catch(e) { }
+              try { player.playVideo(); } catch(e) { /* ignore */ }
             }
           }
           e.preventDefault();
@@ -527,12 +556,14 @@ if open_player:
   </body>
 </html>
 """
+                        # Veilige vervanging van placeholders
                         html = html.replace("{video_id}", video_id)
                         html = html.replace("{segments_json}", segments_json)
                         html = html.replace("{loop_flag}", loop_flag)
                         html = html.replace("{autoplay_flag}", autoplay_flag)
                         html = html.replace("{loop_checked}", loop_checked)
                         html = html.replace("{autoplay_text}", autoplay_text)
+
                         st.components.v1.html(html, height=720, scrolling=True)
             except Exception as e:
                 st.error(f"Kon bereiken niet parsen of knipsels niet toepassen: {e}")
