@@ -2,6 +2,7 @@ import json
 import re
 from urllib.parse import urlparse, parse_qs
 import streamlit as st
+
 # ---------- Time parsing utilities ----------
 def parse_timepart(t: str) -> float:
     """
@@ -18,12 +19,12 @@ def parse_timepart(t: str) -> float:
     t = t.strip()
     if not t:
         raise ValueError("Empty time string")
+
     # HH:MM:SS or MM:SS or SS (with optional decimal part on seconds)
     if ':' in t:
         parts = [p for p in t.split(':') if p != '']
         if len(parts) > 3:
             raise ValueError(f"Bad time format: {t}")
-        # Convert last part (seconds) to float, others to int
         parts_f = []
         for i, p in enumerate(parts):
             if i == len(parts) - 1:
@@ -40,9 +41,9 @@ def parse_timepart(t: str) -> float:
             m = 0
             s = parts_f[0]
         return float(h) * 3600.0 + float(m) * 60.0 + float(s)
+
     # No colon, but contains a dot
     if '.' in t:
-        # Heuristic: interpret "m.ss" (minutes.seconds) when it makes sense:
         left, right = t.split('.', 1)
         if left == '':
             # ".5" => 0.5 seconds
@@ -51,53 +52,127 @@ def parse_timepart(t: str) -> float:
             li = int(left)
             # If integer part >= 1 and the fractional part looks like seconds (<60 and up to two digits),
             # treat it as minutes.seconds. This covers inputs like "1.03" -> 1 minute 3 seconds.
-            # Otherwise treat as decimal seconds.
-            if li >= 1:
-                # if right only numeric and reasonably sized (< 3 digits), consider it mm.ss
-                if re.fullmatch(r'\d{1,2}$', right):
-                    ri = int(right)
-                    if 0 <= ri < 60:
-                        return float(li) * 60.0 + float(ri)
+            if li >= 1 and re.fullmatch(r'\d{1,2}$', right):
+                ri = int(right)
+                if 0 <= ri < 60:
+                    return float(li) * 60.0 + float(ri)
             # Otherwise, fall back to decimal seconds
             return float(t)
         except ValueError:
-            # Fallback to generic float parse
             return float(t)
+
     # Plain integer seconds
     return float(t)
 
+
 def parse_ranges(range_string: str):
     """
-    Parse a comma-or-newline separated list of time ranges like:
-        0.02-0.05, 1:03-1:20, 12-15, 90-95.5
-    Returns list of (start_seconds, end_seconds) tuples.
+    Parse a string containing comma/newline separated time ranges.
+    This version tolerates extra text (like "(knip)" or other words) and will ignore
+    non-time text. It returns a list of (start_seconds, end_seconds) tuples.
+
+    It looks for the first time-range-like pattern inside each comma/newline-separated piece.
+    Accepts formats like:
+      - 0.02-0.05
+      - 1:03-1:20
+      - 12-15
+      - 90-95.5
     """
     if not range_string:
         return []
-    # split by newline or comma
-    raw_pieces = []
-    for piece in re.split(r'[,\n]+', range_string):
-        piece = piece.strip()
-        if piece:
-            raw_pieces.append(piece)
+    # Remove parenthetical text (like "(knip)") everywhere
+    s = re.sub(r'\([^)]*\)', '', range_string)
+    pieces = [p.strip() for p in re.split(r'[,\n]+', s) if p.strip()]
     ranges = []
-    for piece in raw_pieces:
-        if '-' not in piece:
-            raise ValueError(f"Each range must use '-' to separate start and end: {piece}")
-        a, b = piece.split('-', 1)
+    # regex to capture start and end time tokens (allows different dash characters and spaces)
+    rng_re = re.compile(
+        r'(\d+(?::\d+){0,2}(?:\.\d+)?)[\s\-–—]+(\d+(?::\d+){0,2}(?:\.\d+)?)'
+    )
+    for piece in pieces:
+        m = rng_re.search(piece)
+        if not m:
+            # ignore non-matching fragments (user requested text like "(knip)" to be ignored)
+            continue
+        a, b = m.group(1), m.group(2)
         start = parse_timepart(a.strip())
         end = parse_timepart(b.strip())
         if end <= start:
-            raise ValueError(f"End time must be greater than start time in range '{piece}'")
+            # skip invalid ranges
+            continue
         ranges.append((start, end))
     return ranges
+
+
+# ---------- Interval utilities ----------
+def merge_intervals(intervals, eps=1e-6):
+    """Sort and merge overlapping/adjacent intervals."""
+    if not intervals:
+        return []
+    intervals = sorted(intervals, key=lambda x: x[0])
+    merged = []
+    cur_s, cur_e = intervals[0]
+    for s, e in intervals[1:]:
+        if s <= cur_e + eps:
+            cur_e = max(cur_e, e)
+        else:
+            merged.append((cur_s, cur_e))
+            cur_s, cur_e = s, e
+    merged.append((cur_s, cur_e))
+    return merged
+
+
+def subtract_intervals(segments, cuts):
+    """
+    Subtract 'cuts' from 'segments'. Both inputs expected as lists of (s,e).
+    Returns list of resulting segments after removal.
+    """
+    if not segments:
+        return []
+    if not cuts:
+        return merge_intervals(segments)
+
+    cuts = merge_intervals(cuts)
+    result = []
+    for s, e in merge_intervals(segments):
+        cur = s
+        for cs, ce in cuts:
+            if ce <= cur:
+                # cut ends before current start
+                continue
+            if cs >= e:
+                # cuts start after segment end; no more overlaps
+                break
+            # overlap exists
+            if cs <= cur and ce >= e:
+                # cut covers entire segment -> nothing left
+                cur = e
+                break
+            if cs <= cur < ce < e:
+                # cut covers start portion of segment -> move start forward
+                cur = ce
+                continue
+            if cur < cs < e <= ce:
+                # cut covers the tail of the segment -> keep head and finish
+                if cs - cur > 1e-9:
+                    result.append((cur, cs))
+                cur = e
+                break
+            if cur < cs and ce < e:
+                # cut is inside segment -> keep head portion, then continue after cut
+                if cs - cur > 1e-9:
+                    result.append((cur, cs))
+                cur = ce
+                continue
+        if cur < e - 1e-9:
+            result.append((cur, e))
+    return merge_intervals(result)
+
 
 # ---------- YouTube ID extraction ----------
 def extract_yt_id(url: str):
     if not url:
         return None
     url = url.strip()
-    # Try standard parse
     try:
         parsed = urlparse(url)
         hostname = (parsed.hostname or "").lower()
@@ -107,31 +182,25 @@ def extract_yt_id(url: str):
             qs = parse_qs(parsed.query)
             if "v" in qs:
                 return qs["v"][0]
-            # paths like /embed/VIDEOID or /v/VIDEOID
             path_parts = [p for p in parsed.path.split('/') if p != '']
             for i, p in enumerate(path_parts):
                 if p in ("embed", "v"):
                     if len(path_parts) > i + 1:
                         return path_parts[i + 1]
-            # maybe last part is id
             last = path_parts[-1] if path_parts else ''
             if len(last) == 11:
                 return last
     except Exception:
         pass
-    # fallback: regex search for 11-char id
     m = re.search(r"([0-9A-Za-z_-]{11})", url)
     if m:
         return m.group(1)
     return None
 
+
 # ---------- Streamlit UI ----------
 st.set_page_config(page_title="YouTube Segment Player", layout="centered")
-# Title and intro
-st.markdown(
-    "<h1 style='margin-bottom:0.2rem'>YouTube Segment Player — Play only specified parts (no download)</h1>",
-    unsafe_allow_html=True,
-)
+st.markdown("<h1 style='margin-bottom:0.2rem'>YouTube Segment Player — Play only specified parts (no download)</h1>", unsafe_allow_html=True)
 st.markdown(
     """
 Paste a YouTube link and time ranges (comma or newline separated). Examples of supported time formats:
@@ -139,8 +208,9 @@ Paste a YouTube link and time ranges (comma or newline separated). Examples of s
 - 1:03-1:20  (MM:SS)
 - 12-15
 - 90-95.5
-This app embeds the YouTube player and plays only the segments you specify in sequence using
-the YouTube IFrame API. No video files are downloaded or processed on the server.
+
+You can also provide "Sections to cut" — time ranges that will be removed from the playback segments.
+Extra text like "(knip)" or other annotations will be ignored automatically.
 """.strip()
 )
 
@@ -149,39 +219,43 @@ col1, col2 = st.columns([2, 1])
 with col1:
     url = st.text_input("YouTube URL", placeholder="https://www.youtube.com/watch?v=VIDEO_ID")
     ranges_input = st.text_area(
-        "Time ranges (comma or newline separated)",
-        value="0.02-0.05, 1:03-1:20",
+        "Time ranges to play (comma or newline separated)",
+        value="0.00-4.43",
         height=140,
-        help="Examples: 0.02-0.05, 1:03-1:20, 12-15, 90-95.5"
+        help="Examples: 0.02-0.05, 1:03-1:20, 12-15, 90-95.5\nText like '(knip)' will be ignored."
+    )
+    cuts_input = st.text_area(
+        "Sections to cut (these will be removed from the playback)",
+        value="3.12-3.32 (knip), 4.44-5.21 (knip)",
+        height=120,
+        help="Enter ranges that should be removed from the playback. Annotations like '(knip)' are ignored."
     )
     example_expander = st.expander("Show example inputs")
     with example_expander:
         st.markdown(
-            "- Adjacent short ranges: `0.02-0.05, 0.05-0.06` (use end padding to avoid premature cut)\n"
-            "- Minutes/seconds: `1:03-1:20`\n"
-            "- Decimal seconds: `95.5-100.0`"
+            "- Play ranges: `0.00-4.43`\n"
+            "- Cuts: `3.12-3.32 (knip), 4.44-5.21 (knip)`\n"
+            "- Resulting segments shown in the player will have the cuts removed."
         )
+
 with col2:
     st.markdown("Options")
-    # Autoplay checked by default
     autoplay = st.checkbox("Attempt autoplay (may be blocked by browser)", value=True)
-    # Loop segments: default ON
     loop = st.checkbox("Loop segments", value=True)
-    # End padding default set to 1.0
     end_padding = st.number_input(
         "End padding (seconds)",
         min_value=0.0,
         max_value=5.0,
         value=1.0,
         step=0.1,
-        help="Add a small padding to each requested end time to avoid premature cutting. "
-             "Default is 1.0 second."
+        help="Add padding to each requested end time to avoid premature cutting. Default 1.0s."
     )
     # Always merge adjacent/overlapping segments
     merge_adjacent = True
 
 st.write("")  # small spacer
 open_player = st.button("Open Player")
+
 if open_player:
     if not url.strip():
         st.error("Please enter a YouTube URL.")
@@ -191,30 +265,28 @@ if open_player:
             st.error("Could not extract a YouTube video ID from that URL. Please check the URL.")
         else:
             try:
-                ranges = parse_ranges(ranges_input)
-                if not ranges:
-                    st.error("No valid ranges parsed. Enter at least one range.")
+                parsed_ranges = parse_ranges(ranges_input)
+                parsed_cuts = parse_ranges(cuts_input)
+
+                if not parsed_ranges:
+                    st.error("No valid ranges parsed. Enter at least one range to play.")
                 else:
-                    # Optionally merge overlapping/adjacent segments (now always enabled)
+                    # Merge ranges and cuts
                     if merge_adjacent:
-                        eps = 1e-6
-                        ranges = sorted(ranges, key=lambda x: x[0])
-                        merged = []
-                        cur_s, cur_e = ranges[0]
-                        for s, e in ranges[1:]:
-                            if s <= cur_e + eps:
-                                cur_e = max(cur_e, e)
-                            else:
-                                merged.append((cur_s, cur_e))
-                                cur_s, cur_e = s, e
-                        merged.append((cur_s, cur_e))
-                        ranges = merged
-                    # Build the HTML + JS that uses YouTube IFrame API
-                    segments_json = json.dumps([[float(s), float(e)] for (s, e) in ranges])
-                    autoplay_flag = "true" if autoplay else "false"
-                    loop_flag = "true" if loop else "false"
-                    # Sizing: responsive width; improved readability styles
-                    html = f"""
+                        parsed_ranges = merge_intervals(parsed_ranges)
+                        parsed_cuts = merge_intervals(parsed_cuts)
+
+                    # Subtract cuts from the main ranges
+                    final_segments = subtract_intervals(parsed_ranges, parsed_cuts)
+
+                    if not final_segments:
+                        st.error("No segments remain after applying cuts.")
+                    else:
+                        # Build HTML/JS player
+                        segments_json = json.dumps([[float(s), float(e)] for (s, e) in final_segments])
+                        autoplay_flag = "true" if autoplay else "false"
+                        loop_flag = "true" if loop else "false"
+                        html = f"""
 <!doctype html>
 <html>
   <head>
@@ -292,26 +364,21 @@ if open_player:
         html += '</ol>';
         el.innerHTML = html;
       }}
-      // Improved secondsToString: preserves fractional seconds (two decimals)
       function secondsToString(s) {{
         var total = Number(s);
         if (!isFinite(total)) return String(s);
         var h = Math.floor(total / 3600);
         var m = Math.floor((total % 3600) / 60);
         var sec = total % 60;
-        // integer and fractional parts for seconds
         var secInt = Math.floor(sec);
         var frac = sec - secInt;
-        // format fractional part to two decimals
         var fracStr = (frac > 0) ? frac.toFixed(2).substring(1) : '.00';
-        // seconds with two-decimal fraction, padded to 2 digits before decimal
         var secStr = String(secInt).padStart(2, '0') + fracStr;
         if (h > 0) {{
           return h + ':' + String(m).padStart(2, '0') + ':' + secStr;
         }}
         return String(m) + ':' + secStr;
       }}
-      // Load YouTube IFrame API
       (function() {{
         var tag = document.createElement('script');
         tag.src = "https://www.youtube.com/iframe_api";
@@ -336,9 +403,7 @@ if open_player:
       }}
       function onPlayerReady(event) {{
         renderSegments();
-        // Attempt to play segments immediately if autoplay requested.
         if (autoplay) {{
-          // small delay to allow iframe to become fully ready
           setTimeout(function() {{
             userLoop = document.getElementById('loop').checked;
             playSegment(0);
@@ -363,37 +428,29 @@ if open_player:
         var start = Number(segments[currentIndex][0]);
         var end = Number(segments[currentIndex][1]);
         var segLength = Math.max(0.0, end - start);
-        // Decide padding for this segment; keep it conservative for very short segments.
         var padding = Number(endPadding);
         if (segLength > 0) {{
-          // don't allow padding to exceed quarter of segment length for tiny segments
           padding = Math.min(padding, Math.max(0.001, segLength / 4));
         }} else {{
           padding = Math.max(0.001, padding);
         }}
         var effectiveEnd = end + padding;
-        // Clear any previous interval before seeking/playing
         if (checkInterval) {{
           clearInterval(checkInterval);
           checkInterval = null;
         }}
-        // Seek and play with a short delay to improve reliability for tiny segments.
         setTimeout(function() {{
           try {{ player.seekTo(start, true); }} catch(e) {{ console.warn(e); }}
           try {{ player.playVideo(); }} catch(e) {{ console.warn(e); }}
-          // second attempt a bit later (helps when autoplay is restricted or player is still buffering)
           setTimeout(function() {{
             try {{ player.playVideo(); }} catch(e) {{ /* ignore */ }}
           }}, 120);
         }}, 40);
-        // Tolerance: small value; ensure we don't advance before actually reaching start.
         var tolerance = Math.max(0.005, Math.min(0.05, padding * 0.5));
-        // Choose check frequency: faster for very short segments
         var checkFreq = segLength < 0.25 ? 30 : 100;
         checkInterval = setInterval(function() {{
           if (!player || typeof player.getCurrentTime !== 'function') return;
           var now = player.getCurrentTime();
-          // Only consider advancing after we've definitely started the segment.
           if (now >= start - 0.02 && now >= (effectiveEnd - tolerance)) {{
             clearInterval(checkInterval);
             checkInterval = null;
@@ -431,7 +488,6 @@ if open_player:
         checkInterval = null;
         playSegment(Math.max(0, currentIndex - 1));
       }});
-      // Keyboard shortcuts
       document.addEventListener('keydown', function(e) {{
         if (e.key === ' ') {{
           if (player) {{
@@ -455,7 +511,6 @@ if open_player:
   </body>
 </html>
 """
-                    # Render HTML in Streamlit (taller so UI fits)
-                    st.components.v1.html(html, height=720, scrolling=True)
+                        st.components.v1.html(html, height=720, scrolling=True)
             except Exception as e:
-                st.error(f"Could not parse ranges: {e}")
+                st.error(f"Could not parse ranges or apply cuts: {e}")
