@@ -349,12 +349,12 @@ if open_player:
     <div id="container" class="card">
       <div id="player"></div>
       <div id="controls">
-        <button id="playAll" class="primary">Speel segmenten</button>
+        <button id="playAll" class="primary">Speel Fragmenten af</button>
         <button id="pause">Pauzeer</button>
         <button id="prev">Vorige</button>
         <button id="next">Volgende</button>
         <label style="margin-left:8px;">
-          <input type="checkbox" id="loop" {loop_checked}> Herhalen
+          <input type="checkbox" id="loop" {loop_checked}> Herhalen/loopen
         </label>
         <div class="muted">Poging automatisch afspelen: {autoplay_text}</div>
       </div>
@@ -417,7 +417,7 @@ if open_player:
         segments[idx][2] = v;
         var inp = document.getElementById('pad_' + idx);
         if (inp) inp.value = v.toFixed(3);
-        // Als dit segment momenteel wordt afgespeeld, gebruikt de intervalchecker de nieuwste pad-waarde
+        // Als dit fragment momenteel wordt afgespeeld, gebruikt de intervalchecker de nieuwste pad-waarde
         // zodat de wijziging direct effect heeft.
       }
 
@@ -456,7 +456,7 @@ if open_player:
       }
 
       function onPlayerStateChange(event) {
-        // geen actie; we vertrouwen op de timer om segmenten te vervolgen
+        // geen actie; we vertrouwen op de timer om fragmenten te vervolgen
       }
 
       function playSegment(idx) {
