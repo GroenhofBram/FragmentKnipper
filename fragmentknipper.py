@@ -289,7 +289,8 @@ Extra text like "(knip)" or other annotations will be ignored automatically.
 
 Per-section padding:
 - You can specify a per-section padding after a range using `|<seconds>` or `pad:<seconds>` (e.g. `0.00-4.43|0.2`).
-- If you don't specify a per-section padding, the Default padding value (below) is used.
+- If you don't specify per-range padding, the base padding used is 1 second.
+- After processing ranges & cuts you can tweak each segment's padding individually before launching the player.
 """.strip()
 )
 
@@ -314,27 +315,21 @@ with col1:
         st.markdown(
             "- Play ranges: `0.00-4.43|0.1` (plays 0.00→4.43 with 0.1s padding at the end)\n"
             "- Cuts: `3.12-3.32 (knip), 4.44-5.21 (knip)`\n"
-            "- If you omit the per-range padding, the Default padding (on the right) will be used."
+            "- If you omit the per-range padding, the base padding is 1.0s; you can adjust per segment below."
         )
 
 with col2:
     st.markdown("Options")
     autoplay = st.checkbox("Attempt autoplay (may be blocked by browser)", value=True)
     loop = st.checkbox("Loop segments", value=True)
-    default_padding = st.number_input(
-        "Default padding (seconds) for sections without per-range padding",
-        min_value=0.0,
-        max_value=5.0,
-        value=1.0,  # base value should always be 1 as requested
-        step=0.1,
-        help="Per-section padding overrides this value. Default is 1.0 second."
-    )
-    # Merge adjacent/overlapping segments is always on as requested
-    merge_adjacent = True
+    # global padding removed. base padding is 1.0 and used internally when not specified per-range
+    merge_adjacent = True  # always on as requested
 
 st.write("")  # small spacer
-open_player = st.button("Open Player")
 
+open_player = st.button("Process Ranges and Prepare Player")
+
+# When user clicks the button, parse ranges/cuts and store prepared segments in session_state to allow editing pads
 if open_player:
     if not url.strip():
         st.error("Please enter a YouTube URL.")
@@ -344,9 +339,9 @@ if open_player:
             st.error("Could not extract a YouTube video ID from that URL. Please check the URL.")
         else:
             try:
-                # parse play ranges (with optional per-range padding)
-                parsed_ranges = parse_ranges_with_padding(ranges_input, default_padding)
-                # parse cuts (simple ranges)
+                # base padding is 1.0 unless overridden per-range
+                base_pad = 1.0
+                parsed_ranges = parse_ranges_with_padding(ranges_input, base_pad)
                 parsed_cuts = parse_ranges_simple(cuts_input)
 
                 if not parsed_ranges:
@@ -363,12 +358,53 @@ if open_player:
                     if not final_segments:
                         st.error("No segments remain after applying cuts.")
                     else:
-                        # Build HTML/JS player:
-                        # segments JSON will be list of [start, end, pad]
-                        segments_json = json.dumps([[float(s), float(e), float(p)] for (s, e, p) in final_segments])
-                        autoplay_flag = "true" if autoplay else "false"
-                        loop_flag = "true" if loop else "false"
-                        html = f"""
+                        # store prepared data in session_state so UI can show per-segment padding editors,
+                        # and the Launch Player button can then build the player with chosen paddings.
+                        st.session_state['prepared_video_id'] = video_id
+                        st.session_state['prepared_autoplay'] = autoplay
+                        st.session_state['prepared_loop'] = loop
+                        st.session_state['prepared_segments'] = final_segments
+                        st.success("Ranges processed. Adjust per-segment padding below and click 'Launch Player'.")
+            except Exception as e:
+                st.error(f"Could not parse ranges or apply cuts: {e}")
+
+# If we have prepared segments in session state, allow per-segment padding editing and launching the player
+if 'prepared_segments' in st.session_state:
+    prepared_segments = st.session_state['prepared_segments']
+    st.markdown("### Adjust per-segment padding (seconds)")
+    with st.form("pad_form"):
+        pad_keys = []
+        for i, (s, e, p) in enumerate(prepared_segments):
+            # show a compact description and a number_input for padding
+            start_str = f"{s:.3f}"
+            end_str = f"{e:.3f}"
+            key = f"pad_{i}"
+            pad_keys.append(key)
+            st.number_input(
+                label=f"Segment {i+1}: {start_str} → {end_str}",
+                min_value=0.0,
+                max_value=5.0,
+                value=float(p),
+                step=0.01,
+                format="%.3f",
+                key=key
+            )
+        launch = st.form_submit_button("Launch Player")
+    if launch:
+        # collect pads and build segments JSON with chosen pads
+        adjusted_segments = []
+        for i, (s, e, oldp) in enumerate(prepared_segments):
+            pad = float(st.session_state.get(f"pad_{i}", oldp))
+            adjusted_segments.append((float(s), float(e), float(pad)))
+
+        # Build HTML/JS player and render
+        video_id = st.session_state.get('prepared_video_id')
+        autoplay_flag = "true" if st.session_state.get('prepared_autoplay', True) else "false"
+        loop_flag = "true" if st.session_state.get('prepared_loop', True) else "false"
+
+        segments_json = json.dumps([[float(s), float(e), float(p)] for (s, e, p) in adjusted_segments])
+
+        html = f"""
 <!doctype html>
 <html>
   <head>
@@ -420,9 +456,9 @@ if open_player:
         <button id="prev">Prev</button>
         <button id="next">Next</button>
         <label style="margin-left:8px;">
-          <input type="checkbox" id="loop" {"checked" if loop else ""}> Loop
+          <input type="checkbox" id="loop" {"checked" if loop_flag == 'true' else ""}> Loop
         </label>
-        <div class="muted">Autoplay attempt: {autoplay}</div>
+        <div class="muted">Autoplay attempt: {autoplay_flag}</div>
       </div>
       <div id="segments" class="card" style="margin-top:12px;"></div>
       <div class="hint">Keyboard: Space = Play/Pause, n = next, p = prev</div>
@@ -436,7 +472,6 @@ if open_player:
       var player = null;
       var userLoop = {loop_flag};
       var autoplay = {autoplay_flag};
-      var defaultPadding = {default_padding};  // fallback if segment doesn't have a pad
 
       function renderSegments() {{
         var el = document.getElementById('segments');
@@ -445,7 +480,7 @@ if open_player:
           var cls = (i === currentIndex) ? ' <strong class="current">(current)</strong>' : '';
           var s = secondsToString(segments[i][0]);
           var e = secondsToString(segments[i][1]);
-          var p = (segments[i].length > 2) ? Number(segments[i][2]) : defaultPadding;
+          var p = (segments[i].length > 2) ? Number(segments[i][2]) : 1.0;
           html += '<li><code>' + s + '</code> → <code>' + e + '</code> <span style="color:#6b7280;margin-left:8px;">(pad: ' + p + 's)</span>' + cls + '</li>';
         }}
         html += '</ol>';
@@ -521,7 +556,7 @@ if open_player:
         var start = Number(segments[currentIndex][0]);
         var end = Number(segments[currentIndex][1]);
         var segLength = Math.max(0.0, end - start);
-        var pad = (segments[currentIndex].length > 2) ? Number(segments[currentIndex][2]) : defaultPadding;
+        var pad = (segments[currentIndex].length > 2) ? Number(segments[currentIndex][2]) : 1.0;
         var padding = Number(pad);
         if (segLength > 0) {{
           padding = Math.min(padding, Math.max(0.001, segLength / 4));
@@ -609,6 +644,4 @@ if open_player:
   </body>
 </html>
 """
-                        st.components.v1.html(html, height=720, scrolling=True)
-            except Exception as e:
-                st.error(f"Could not parse ranges or apply cuts: {e}")
+        st.components.v1.html(html, height=720, scrolling=True)
