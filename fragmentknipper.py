@@ -3,7 +3,7 @@ import re
 from urllib.parse import urlparse, parse_qs
 import streamlit as st
 
-# ---------- Time parsing utilities ----------
+# parsen
 def parse_timepart(t: str) -> float:
     if t is None:
         raise ValueError("Lege tijdstring")
@@ -14,7 +14,7 @@ def parse_timepart(t: str) -> float:
     if ':' in t:
         parts = [p for p in t.split(':') if p != '']
         if len(parts) > 3:
-            raise ValueError(f"Foutief tijdsformaat: {t}")
+            raise ValueError(f"Tijdsformaat is fout: {t}")
         parts_f = []
         for i, p in enumerate(parts):
             if i == len(parts) - 1:
@@ -227,18 +227,16 @@ def extract_yt_id(url: str):
 
 
 # ---------- Streamlit UI ----------
-st.set_page_config(page_title="YouTube Segmentspeler", layout="centered")
-st.markdown("<h1 style='margin-bottom:0.2rem'>YouTube Segmentspeler — Speel alleen opgegeven delen (geen download)</h1>", unsafe_allow_html=True)
+st.set_page_config(page_title="Fragmentenspeler - YouTube", layout="centered")
+st.markdown("<h1 style='margin-bottom:0.2rem'>YouTube Fragmentenspeler — Speel alleen opgegeven fragmentdelen af.</h1>", unsafe_allow_html=True)
 st.markdown(
     """
-Plak een YouTube-link en tijdsbereiken (gescheiden door komma's of nieuwe regels). Voorbeelden van ondersteunde tijdformaten:
+Plak een YouTube-link en geef aan welke delen je in het fragment wil (gescheiden door komma's of nieuwe regels). Vul bij "Delen om te knippen" eventueel in welke delen eruit moeten. Je kunt beide tegelijk invullen, dan wordt 
+
+Voorbeelden van ondersteunde tijdformaten:
 - 0.02-0.05  (decimale seconden)
 - 1:03-1:20  (MM:SS)
-- 12-15
-- 90-95.5
-
-Deze app embed de YouTube-speler en speelt alleen de door jou opgegeven segmenten achter elkaar af met behulp van de YouTube IFrame API.
-Er worden geen videobestanden gedownload of verwerkt op de server.
+- 01:04- 3.04
 Extra tekst zoals "(knip)" of andere annotaties wordt automatisch genegeerd.
 """.strip()
 )
@@ -248,30 +246,21 @@ col1, col2 = st.columns([2, 1])
 with col1:
     url = st.text_input("YouTube URL", placeholder="https://www.youtube.com/watch?v=VIDEO_ID")
     ranges_input = st.text_area(
-        "Tijdsbereiken om af te spelen (komma of newline gescheiden). Je kunt per-bereik padding opgeven met '|0.2' of 'pad:0.2'.",
-        value="0.00-4.43",
-        height=160,
-        help="Voorbeelden: 0.02-0.05|0.2, 1:03-1:20 pad:0.5, 12-15. Tekst tussen haakjes wordt genegeerd."
+        "Fragmentdelen om af te spelen (met komma of nieuwe regel gescheiden).",
+        value="0.00-14.43",
+        height=160
     )
     cuts_input = st.text_area(
-        "Delen om te knippen (worden verwijderd uit de afspeellijst)",
-        value="3.12-3.32 (knip), 4.44-5.21 (knip)",
+        "Delen om te knippen (worden verwijderd uit het fragment)",
+        value="3.12-3.32 (knip)\n04.44-05.21 (knip)",
         height=120,
-        help="Voer bereiken in die uit de afspeellijst verwijderd moeten worden. Annotaties zoals '(knip)' worden genegeerd."
     )
-    example_expander = st.expander("Voorbeeldinvoer tonen")
-    with example_expander:
-        st.markdown(
-            "- Afspelen: `0.00-4.43|0.1` (speelt 0.00→4.43 met 0.1s padding)\n"
-            "- Knipsels: `3.12-3.32 (knip), 4.44-5.21 (knip)`\n"
-            "- Als je geen per-bereik padding opgeeft wordt de basis-padding van 1.0s gebruikt."
-        )
+
 
 with col2:
     st.markdown("Opties")
-    autoplay = st.checkbox("Probeer automatisch af te spelen (kan door browser worden geblokkeerd)", value=True)
-    loop = st.checkbox("Herhaal segmenten", value=True)
-    # Geen globale padding-optie; basis padding is 1.0 wanneer niet opgegeven per bereik
+    autoplay = st.checkbox("Speel bij klikken op 'Open speler' automatisch af (kan door browser worden geblokkeerd).", value=True)
+    loop = st.checkbox("Speel fragmenten eindeloos af in een loop", value=True)
     merge_adjacent = True  # altijd aan
 
 st.write("")  # kleine ruimte
@@ -300,7 +289,7 @@ if open_player:
                     final_segments = subtract_cuts_from_padded_segments(parsed_ranges, parsed_cuts)
 
                     if not final_segments:
-                        st.error("Er blijven geen segmenten over na het toepassen van de knipsels.")
+                        st.error("Er blijven geen fragmenten over na het toepassen van de knipsels, is de input correct?.")
                     else:
                         segments_json = json.dumps([[float(s), float(e), float(p)] for (s, e, p) in final_segments])
                         autoplay_flag = "true" if autoplay else "false"
