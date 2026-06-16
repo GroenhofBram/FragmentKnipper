@@ -67,21 +67,19 @@ def parse_timepart(t: str) -> float:
 def parse_ranges_with_padding(range_string: str, default_pad: float):
     """
     Parse a string containing comma/newline separated time ranges.
-    This tolerates extra text (like "(knip)" or other words) and will ignore non-time text.
-    Additionally, a per-range padding can be provided after the range using either:
-      - "|<number>"  e.g. "0.00-4.43|0.2"
-      - "pad:<number>" or "pad=<number>" or "pad <number>"
-      - "p:<number>" or "p=<number>"
-    If no padding is specified for a range, default_pad will be assigned.
+    Accepts optional per-range padding annotations like:
+      - "0.00-4.43|0.2"
+      - "0.00-4.43 pad:0.2"
+      - "0.00-4.43 p=0.2"
+    If no padding specified, default_pad is used.
+    Ignores parenthetical annotations like "(knip)".
     Returns a list of (start_seconds, end_seconds, padding_seconds).
     """
     if not range_string:
         return []
-    # Remove parenthetical text (like "(knip)") to simplify parsing
-    s = re.sub(r'\([^)]*\)', '', range_string)
+    s = re.sub(r'\([^)]*\)', '', range_string)  # remove parenthetical annotations
     pieces = [p.strip() for p in re.split(r'[,\n]+', s) if p.strip()]
     ranges = []
-    # regex to capture start and end time tokens (allows different dash characters and spaces)
     rng_re = re.compile(r'(\d+(?::\d+){0,2}(?:\.\d+)?)[\s\-–—]+(\d+(?::\d+){0,2}(?:\.\d+)?)')
     pad_re_list = [
         re.compile(r'\|\s*([0-9]+(?:\.\d+)?)'),                 # |0.2
@@ -91,7 +89,6 @@ def parse_ranges_with_padding(range_string: str, default_pad: float):
     for piece in pieces:
         m = rng_re.search(piece)
         if not m:
-            # ignore non-matching fragments
             continue
         a, b = m.group(1), m.group(2)
         try:
@@ -101,7 +98,6 @@ def parse_ranges_with_padding(range_string: str, default_pad: float):
             continue
         if end <= start:
             continue
-        # find padding in the remainder of the piece, after the matched range
         pad = None
         tail = piece[m.end():]
         for pre in pad_re_list:
@@ -150,7 +146,6 @@ def parse_ranges_simple(range_string: str):
 def merge_intervals_with_pad(intervals_with_pad, eps=1e-6):
     """
     Merge overlapping/adjacent intervals while preserving/combining padding.
-    intervals_with_pad: list of (s,e,p)
     When merging multiple intervals the resulting padding is set to the max padding among them.
     """
     if not intervals_with_pad:
@@ -195,7 +190,6 @@ def subtract_cuts_from_padded_segments(segments_with_pad, cuts):
     if not segments_with_pad:
         return []
     if not cuts:
-        # Nothing to cut; simply return merged segments (already expected merged)
         return list(segments_with_pad)
 
     cuts = merge_intervals(cuts)
@@ -209,7 +203,6 @@ def subtract_cuts_from_padded_segments(segments_with_pad, cuts):
                 break
             # overlap exists
             if cs <= cur and ce >= e:
-                # cut covers entire segment
                 cur = e
                 break
             if cs <= cur < ce < e:
@@ -227,8 +220,8 @@ def subtract_cuts_from_padded_segments(segments_with_pad, cuts):
                 continue
         if cur < e - 1e-9:
             result.append((cur, e, p))
-    # final merge to collapse adjacent pieces that may have been produced by multiple cuts
-    # but keep per-piece padding: only merge adjacent pieces if their padding is equal (to preserve per-section behavior)
+
+    # Merge adjacent pieces only when padding matches exactly
     if not result:
         return []
     merged = []
@@ -288,9 +281,9 @@ You can also provide "Sections to cut" — time ranges that will be removed from
 Extra text like "(knip)" or other annotations will be ignored automatically.
 
 Per-section padding:
-- You can specify a per-section padding after a range using `|<seconds>` or `pad:<seconds>` (e.g. `0.00-4.43|0.2`).
-- If you don't specify per-range padding, the base padding used is 1 second.
-- After processing ranges & cuts you can tweak each segment's padding individually before launching the player.
+- You can specify a per-range padding with `|<seconds>` or `pad:<seconds>`.
+- If not provided the base padding used is 1.0 second.
+- After the player loads, you can edit each segment's padding inline in the segments box.
 """.strip()
 )
 
@@ -315,21 +308,19 @@ with col1:
         st.markdown(
             "- Play ranges: `0.00-4.43|0.1` (plays 0.00→4.43 with 0.1s padding at the end)\n"
             "- Cuts: `3.12-3.32 (knip), 4.44-5.21 (knip)`\n"
-            "- If you omit the per-range padding, the base padding is 1.0s; you can adjust per segment below."
+            "- If you omit per-range padding, a base padding of 1.0s is used."
         )
 
 with col2:
     st.markdown("Options")
     autoplay = st.checkbox("Attempt autoplay (may be blocked by browser)", value=True)
     loop = st.checkbox("Loop segments", value=True)
-    # global padding removed. base padding is 1.0 and used internally when not specified per-range
-    merge_adjacent = True  # always on as requested
+    # No global padding setting; base padding fixed to 1.0 (used when ranges don't specify a pad)
+    merge_adjacent = True  # always on
 
 st.write("")  # small spacer
+open_player = st.button("Open Player")
 
-open_player = st.button("Process Ranges and Prepare Player")
-
-# When user clicks the button, parse ranges/cuts and store prepared segments in session_state to allow editing pads
 if open_player:
     if not url.strip():
         st.error("Please enter a YouTube URL.")
@@ -339,7 +330,6 @@ if open_player:
             st.error("Could not extract a YouTube video ID from that URL. Please check the URL.")
         else:
             try:
-                # base padding is 1.0 unless overridden per-range
                 base_pad = 1.0
                 parsed_ranges = parse_ranges_with_padding(ranges_input, base_pad)
                 parsed_cuts = parse_ranges_simple(cuts_input)
@@ -347,64 +337,21 @@ if open_player:
                 if not parsed_ranges:
                     st.error("No valid ranges parsed. Enter at least one range to play.")
                 else:
-                    # Merge ranges and cuts
                     if merge_adjacent:
                         parsed_ranges = merge_intervals_with_pad(parsed_ranges)
                         parsed_cuts = merge_intervals(parsed_cuts)
 
-                    # Subtract cuts from the main ranges, preserving per-section padding
                     final_segments = subtract_cuts_from_padded_segments(parsed_ranges, parsed_cuts)
 
                     if not final_segments:
                         st.error("No segments remain after applying cuts.")
                     else:
-                        # store prepared data in session_state so UI can show per-segment padding editors,
-                        # and the Launch Player button can then build the player with chosen paddings.
-                        st.session_state['prepared_video_id'] = video_id
-                        st.session_state['prepared_autoplay'] = autoplay
-                        st.session_state['prepared_loop'] = loop
-                        st.session_state['prepared_segments'] = final_segments
-                        st.success("Ranges processed. Adjust per-segment padding below and click 'Launch Player'.")
-            except Exception as e:
-                st.error(f"Could not parse ranges or apply cuts: {e}")
+                        # Build HTML/JS player. The segments array includes per-segment padding as third value.
+                        segments_json = json.dumps([[float(s), float(e), float(p)] for (s, e, p) in final_segments])
+                        autoplay_flag = "true" if autoplay else "false"
+                        loop_flag = "true" if loop else "false"
 
-# If we have prepared segments in session state, allow per-segment padding editing and launching the player
-if 'prepared_segments' in st.session_state:
-    prepared_segments = st.session_state['prepared_segments']
-    st.markdown("### Adjust per-segment padding (seconds)")
-    with st.form("pad_form"):
-        pad_keys = []
-        for i, (s, e, p) in enumerate(prepared_segments):
-            # show a compact description and a number_input for padding
-            start_str = f"{s:.3f}"
-            end_str = f"{e:.3f}"
-            key = f"pad_{i}"
-            pad_keys.append(key)
-            st.number_input(
-                label=f"Segment {i+1}: {start_str} → {end_str}",
-                min_value=0.0,
-                max_value=5.0,
-                value=float(p),
-                step=0.01,
-                format="%.3f",
-                key=key
-            )
-        launch = st.form_submit_button("Launch Player")
-    if launch:
-        # collect pads and build segments JSON with chosen pads
-        adjusted_segments = []
-        for i, (s, e, oldp) in enumerate(prepared_segments):
-            pad = float(st.session_state.get(f"pad_{i}", oldp))
-            adjusted_segments.append((float(s), float(e), float(pad)))
-
-        # Build HTML/JS player and render
-        video_id = st.session_state.get('prepared_video_id')
-        autoplay_flag = "true" if st.session_state.get('prepared_autoplay', True) else "false"
-        loop_flag = "true" if st.session_state.get('prepared_loop', True) else "false"
-
-        segments_json = json.dumps([[float(s), float(e), float(p)] for (s, e, p) in adjusted_segments])
-
-        html = f"""
+                        html = f"""
 <!doctype html>
 <html>
   <head>
@@ -436,15 +383,19 @@ if 'prepared_segments' in st.session_state:
         color: white;
         border: none;
       }}
-      button:active {{ transform: translateY(1px); }}
-      label {{ font-size: 14px; }}
-      #segments {{ margin-top: 12px; font-size: 15px; max-width:100%; }}
-      ol {{ padding-left: 1.15rem; margin: 6px 0; }}
-      li {{ margin-bottom:6px; line-height:1.35; }}
-      li strong.current {{ color: var(--accent); margin-left:6px; font-weight:700; }}
+      .pad-input {{
+        width:72px;
+        padding:4px 6px;
+        border-radius:6px;
+        border:1px solid #ddd;
+        font-size:13px;
+        margin-left:8px;
+      }}
+      .seg-row {{ display:flex; align-items:center; gap:8px; margin-bottom:6px; }}
+      .seg-times {{ font-family: monospace; }}
       .muted {{ color: var(--muted); font-size:13px; margin-left:auto; }}
       .hint {{ color: var(--muted); font-size:13px; margin-top:6px; }}
-      code {{ background:#fff; padding:0 6px; border-radius:4px; border:1px solid #eee; }}
+      .current {{ color: var(--accent); font-weight:700; margin-left:6px; }}
     </style>
   </head>
   <body>
@@ -456,36 +407,24 @@ if 'prepared_segments' in st.session_state:
         <button id="prev">Prev</button>
         <button id="next">Next</button>
         <label style="margin-left:8px;">
-          <input type="checkbox" id="loop" {"checked" if loop_flag == 'true' else ""}> Loop
+          <input type="checkbox" id="loop" {"checked" if loop else ""}> Loop
         </label>
-        <div class="muted">Autoplay attempt: {autoplay_flag}</div>
+        <div class="muted">Autoplay attempt: {autoplay}</div>
       </div>
+
       <div id="segments" class="card" style="margin-top:12px;"></div>
-      <div class="hint">Keyboard: Space = Play/Pause, n = next, p = prev</div>
+      <div class="hint">Click a pad box and change the value to adjust padding for that segment. Changes take effect immediately.</div>
     </div>
+
     <script>
       var videoId = "{video_id}";
-      // segments are [start, end, pad]
+      // Each segment: [start, end, pad]
       var segments = {segments_json};
       var currentIndex = 0;
       var checkInterval = null;
       var player = null;
       var userLoop = {loop_flag};
       var autoplay = {autoplay_flag};
-
-      function renderSegments() {{
-        var el = document.getElementById('segments');
-        var html = '<b>Segments:</b><ol>';
-        for (var i=0;i<segments.length;i++) {{
-          var cls = (i === currentIndex) ? ' <strong class="current">(current)</strong>' : '';
-          var s = secondsToString(segments[i][0]);
-          var e = secondsToString(segments[i][1]);
-          var p = (segments[i].length > 2) ? Number(segments[i][2]) : 1.0;
-          html += '<li><code>' + s + '</code> → <code>' + e + '</code> <span style="color:#6b7280;margin-left:8px;">(pad: ' + p + 's)</span>' + cls + '</li>';
-        }}
-        html += '</ol>';
-        el.innerHTML = html;
-      }}
 
       function secondsToString(s) {{
         var total = Number(s);
@@ -503,6 +442,36 @@ if 'prepared_segments' in st.session_state:
         return String(m) + ':' + secStr;
       }}
 
+      function renderSegments() {{
+        var el = document.getElementById('segments');
+        var html = '<b>Segments:</b><div style="margin-top:8px">';
+        for (var i=0;i<segments.length;i++) {{
+          var s = secondsToString(segments[i][0]);
+          var e = secondsToString(segments[i][1]);
+          var p = (segments[i].length > 2) ? Number(segments[i][2]).toFixed(3) : '1.000';
+          var currentMark = (i === currentIndex) ? '<span class="current">(current)</span>' : '';
+          html += '<div class="seg-row">';
+          html += '<div class="seg-times"><strong>' + (i+1) + '.</strong>&nbsp;&nbsp;' + s + ' → ' + e + '</div>';
+          html += '<div style="margin-left:6px;color:#6b7280;">(pad: </div>';
+          html += '<input type="number" min="0" max="5" step="0.01" class="pad-input" id="pad_' + i + '" value="' + p + '" oninput="onPadInput(' + i + ', this.value)">';
+          html += '<div style="color:#6b7280;">s)</div>';
+          html += currentMark;
+          html += '</div>';
+        }}
+        html += '</div>';
+        el.innerHTML = html;
+      }}
+
+      function onPadInput(idx, val) {{
+        var v = parseFloat(val);
+        if (!isFinite(v) || v < 0) v = 0;
+        // clamp to reasonable range
+        if (v > 5) v = 5;
+        segments[idx][2] = v;
+        // no need to re-render entire list; keep input as-is. But update any other UI dependent on pad if needed.
+      }}
+
+      // Load YouTube IFrame API
       (function() {{
         var tag = document.createElement('script');
         tag.src = "https://www.youtube.com/iframe_api";
@@ -565,6 +534,10 @@ if 'prepared_segments' in st.session_state:
         }}
         var effectiveEnd = end + padding;
 
+        // ensure the input field shows the currently used padding (in case clamping occurred)
+        var padInput = document.getElementById('pad_' + currentIndex);
+        if (padInput) padInput.value = padding.toFixed(3);
+
         if (checkInterval) {{
           clearInterval(checkInterval);
           checkInterval = null;
@@ -621,6 +594,7 @@ if 'prepared_segments' in st.session_state:
         checkInterval = null;
         playSegment(Math.max(0, currentIndex - 1));
       }});
+      // Keyboard shortcuts
       document.addEventListener('keydown', function(e) {{
         if (e.key === ' ') {{
           if (player) {{
@@ -644,4 +618,6 @@ if 'prepared_segments' in st.session_state:
   </body>
 </html>
 """
-        st.components.v1.html(html, height=720, scrolling=True)
+                        st.components.v1.html(html, height=720, scrolling=True)
+            except Exception as e:
+                st.error(f"Could not parse ranges or apply cuts: {e}")
